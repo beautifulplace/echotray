@@ -1,0 +1,16 @@
+[package]
+name = "whispertype-helperd"
+version = "3.2.0"
+edition = "2021"
+description = "Privileged input daemon for WhisperType (global hotkey + Ctrl+V injection)"
+license = "MIT"
+
+[[bin]]
+name = "whispertype-helperd"
+path = "src/main.rs"
+
+# Zero external dependencies by design:
+# - No crates.io dependency -> builds fully offline (works on air-gapped / minimal systems)
+# - Minimal, auditable supply-chain surface for a daemon that handles kernel input
+# - Uses only the standard library + hand-rolled libc FFI
+[dependencies]
