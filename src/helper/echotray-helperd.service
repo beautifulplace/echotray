@@ -1,0 +1,18 @@
+[Unit]
+Description=EchoTray privileged input daemon (hotkey + paste injection)
+Documentation=file:///usr/local/share/doc/echotray/README.md
+After=local-fs.target
+
+[Service]
+Type=simple
+# Runs as root so it can access /dev/uinput and the physical keyboards.
+# The GUI connects as an unprivileged user; peers are authorized by UID.
+ExecStart=/usr/local/lib/echotray/echotray-helperd
+Restart=on-failure
+RestartSec=2
+# No network exposure: only a root-owned Unix socket.
+PrivateTmp=yes
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target
