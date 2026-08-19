@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.0.7] - 2026-08-19
+
+### Added
+- **Setup window for the Whisper model.** A new non-modal Setup window (opened
+  from a new **Setup...** menu item) shows a status light (green when a model
+  is loaded, red when none), the currently loaded model, a dropdown to change
+  model size (tiny/base/small/medium/large-v3), a Download button, and a live
+  progress bar. The download is owned by the app and continues even if the
+  window is closed. This is now the way to install the model on first run and
+  to change the model size later.
+- **Three more settings in the Setup window**, each in its own framed section
+  below the Whisper Model section (no status lights):
+  - **Language** - a dropdown to set the dictation language (Auto-detect,
+    English, French, German, Spanish, Italian, Portuguese, Dutch). Writes
+    `WHISPER_LANGUAGE` and applies live.
+  - **Paste delay** - a spin box for the delay between copying the text and
+    pasting it (ms). Increase if the paste comes out blank. Writes
+    `PASTE_DELAY_MS` and applies live.
+  - **Max recording length** - a spin box for how long a recording can run
+    before auto-stopping (seconds). Writes `MAX_RECORDING_SECONDS` and applies
+    live.
+- Settings are persisted to `.env` and take effect immediately (no restart).
+
+### Changed
+- **Menu now matches EchoTalk's shape.** The tray menu is now: Status, Start
+  recording, Setup..., About, Quit. The "Check status" item was removed, and
+  "Install model…" was replaced by the **Setup...** window.
+
+### Fixed
+- **Tray icon was green at startup with no model loaded.** The 500ms icon
+  re-assert poll timer showed the green idle icon whenever the state was IDLE,
+  even before a model was loaded, overriding the grey disabled icon. It now
+  keeps the grey "Waiting for model" icon until a model is actually loaded.
+- **Setup window no longer grows to the longest sentence.** The window width is
+  now capped (default 420px, min 360px) and the hint labels wrap at a fixed
+  character width, so long hint text no longer stretches the window. Height
+  still auto-sizes to fit the sections.
+- **Notifications no longer stack up in the notification tray.** All
+  `notify-send` messages are now marked transient (`transient:true`) with a 5s
+  timeout, so the notification daemon shows them briefly and dismisses them
+  instead of keeping every one in the tray/center. This stops the tray from
+  filling to the top of the screen and hiding notifications you missed.
+
 ## [2.0.6] - 2026-08-13
 
 ### Fixed
