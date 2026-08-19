@@ -13,12 +13,11 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.6"
+__version__ = "2.0.7"
 
 import os
 import pathlib
 import gc
-import shutil
 import signal
 import subprocess
 import sys
@@ -26,7 +25,6 @@ import threading
 import time
 
 import gi
-import sounddevice as sd
 from dotenv import load_dotenv
 
 gi.require_version("Gtk", "3.0")
@@ -39,7 +37,10 @@ import whisper
 
 load_dotenv()
 
-_DOTENV_PATH = pathlib.Path(__file__).resolve().parent.parent / ".env"
+# The real .env lives in the install dir (one level above app/), e.g.
+# ~/.local/share/echotray/.env. load_dotenv() finds it by searching upward
+# from this file; _DOTENV_PATH is the same location for writing settings.
+_DOTENV_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / ".env"
 
 # Startup log: everything printed (and any traceback) is also written here, so
 # launching from a desktop icon (no terminal) still leaves a record of what
@@ -74,9 +75,19 @@ NOTIFY_VERBOSE         = os.getenv("NOTIFY_VERBOSE",         "false").lower() ==
 # ── Notifications ─────────────────────────────────────────────────────────────
 
 def notify(summary, body="", icon="audio-input-microphone", urgency="normal"):
-    """Send a desktop notification and print to terminal."""
+    """Send a desktop notification and print to terminal.
+
+    Notifications are marked transient (hint `transient:true`) so the
+    notification daemon does NOT keep them in the notification tray/center -
+    they show briefly and disappear, instead of stacking up to the top of the
+    screen. A short timeout (5s) also auto-dismisses them.
+    """
     print(f"[{summary}] {body}" if body else f"[{summary}]")
-    args = ["notify-send", "-i", icon, "-u", urgency, summary]
+    args = [
+        "notify-send", "-i", icon, "-u", urgency,
+        "-t", "5000", "-h", "string:transient:true",
+        summary,
+    ]
     if body:
         args.append(body)
     try:
@@ -120,162 +131,312 @@ def _acquire_single_instance() -> bool:
         return False
 
 
-# ── Model download progress window ────────────────────────────────────────────
+# ── Setup window (non-modal, single Whisper Model section) ───────────────────
 
-def show_download_progress_dialog(model_size):
-    """Return a (window, progress_bar, status_label) and a callback to update them.
+class _RoundedFrame(Gtk.Bin):
+    """A container that draws its own rounded border with cairo.
 
-    Runs the download in a background thread and updates a modal dialog with a
-    progress bar, so first-launch (model download) is visible instead of the app
-    silently hanging with no UI.
+    Theme CSS borders on Gtk.Frame are unreliable (themes override them), so we
+    draw the border directly. This gives exact, theme-independent control over
+    wall thickness and corner radius.
     """
-    dialog = Gtk.Dialog(
-        title="EchoTray - downloading model",
-        transient_for=None,
-        flags=0,
-    )
-    dialog.set_default_size(420, -1)
-    # Ensure the dialog is impossible to miss: keep it above other windows and
-    # bring it to the front when it appears (otherwise on first-launch the
-    # download can run for minutes with no visible UI).
-    dialog.set_keep_above(True)
-    dialog.set_modal(True)
 
-    box = dialog.get_content_area()
-    label = Gtk.Label(
-        label=(
-            f"Downloading the Whisper '{model_size}' model (~{_model_size_mb(model_size)} MB).\n"
-            "This happens once and is cached locally.\n"
-            "Please wait - dictation will be ready when this finishes."
-        )
-    )
-    label.set_line_wrap(True)
-    box.pack_start(label, False, False, 6)
+    def __init__(self, border_width=5, radius=12, pad=10):
+        super().__init__()
+        self._border_width = border_width
+        self._radius = radius
+        self._pad = pad
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+        self.connect("draw", self._draw)
 
-    progress = Gtk.ProgressBar()
-    progress.set_show_text(True)
-    progress.set_text("0%")
-    box.pack_start(progress, False, False, 6)
+    def _rounded_path(self, cr, x0, y0, w, h):
+        r = self._radius
+        x1, y1 = x0 + w, y0 + h
+        cr.arc(x1 - r, y0 + r, r, -3.14159 / 2, 0)
+        cr.arc(x1 - r, y1 - r, r, 0, 3.14159 / 2)
+        cr.arc(x0 + r, y1 - r, r, 3.14159 / 2, 3.14159)
+        cr.arc(x0 + r, y0 + r, r, 3.14159, 3 * 3.14159 / 2)
+        cr.close_path()
 
-    status = Gtk.Label(label="Connecting…")
-    box.pack_start(status, False, False, 4)
-
-    dialog.show_all()
-    dialog.present()  # bring to front so the user sees the download is happening
-
-    def update(fraction, _bytes):
-        pct = int(fraction * 100)
-        progress.set_fraction(fraction)
-        progress.set_text(f"{pct}%")
-        if pct >= 100:
-            status.set_text("Download complete - loading model…")
-        else:
-            status.set_text(f"Downloaded {pct}%")
-
-    return dialog, update
+    def _draw(self, _widget, cr):
+        alloc = self.get_allocation()
+        # Inset by half the border width so the stroke isn't clipped at the edge.
+        bw = self._border_width
+        pad = bw / 2.0
+        w = alloc.width - bw
+        h = alloc.height - bw
+        self._rounded_path(cr, pad, pad, w, h)
+        # Subtle fill so the group reads as a panel.
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.05)
+        cr.fill_preserve()
+        # The visible border (drawn after the fill, on the same path).
+        cr.set_source_rgb(0.55, 0.57, 0.60)
+        cr.set_line_width(self._border_width)
+        cr.stroke()
+        return False  # let children draw on top
 
 
-def _model_size_mb(size):
-    # Approximate model.bin sizes for the progress text.
-    return {"tiny": 75, "base": 145, "small": 466, "medium": 1519, "large-v3": 3018}.get(size, 466)
+class _StatusLight(Gtk.DrawingArea):
+    """A small filled circle that is red (no model) or green (model loaded)."""
+
+    def __init__(self, size=16):
+        super().__init__()
+        self.set_size_request(size, size)
+        self._ok = False
+        self.connect("draw", self._draw)
+
+    def set_ok(self, ok):
+        self._ok = bool(ok)
+        self.queue_draw()
+
+    def _draw(self, _widget, cr):
+        color = (0.09, 0.63, 0.29) if self._ok else (0.86, 0.16, 0.16)
+        alloc = self.get_allocation()
+        cx = alloc.width / 2
+        cy = alloc.height / 2
+        r = min(alloc.width, alloc.height) / 2 - 2
+        cr.set_source_rgb(*color)
+        cr.arc(cx, cy, r, 0, 2 * 3.14159)
+        cr.fill()
 
 
-def show_model_choice_dialog():
-    """Let the user pick a Whisper model size before the first download.
+class SetupWindow(Gtk.Window):
+    """Non-modal setup window with a Whisper Model section plus simple settings.
 
-    Defaults to 'small' (best accuracy), but offers smaller/faster models for
-    older or low-memory systems. Returns the chosen size string, or None if the
-    user cancels.
+    The Whisper Model section shows a status light (green when a model is
+    loaded, red when none), the currently loaded model, a dropdown to change
+    model size, a Download button, and a live progress bar. Below it are three
+    simple selector sections (no status lights): Language, Paste delay, and
+    Max recording length. The model download is owned by the app and continues
+    even if this window is closed.
     """
-    dialog = Gtk.Dialog(
-        title="EchoTray - choose model",
-        transient_for=None,
-        flags=0,
-    )
-    dialog.set_default_size(440, -1)
-    dialog.set_keep_above(True)
-    dialog.set_modal(True)
 
-    box = dialog.get_content_area()
+    _MODEL_SIZES = ["small", "base", "tiny", "medium", "large-v3"]
 
-    intro = Gtk.Label(
-        label=(
-            "EchoTray needs to download a Whisper model (once, cached locally).\n"
-            "Choose the size that fits your system:"
-        )
-    )
-    intro.set_line_wrap(True)
-    box.pack_start(intro, False, False, 6)
+    def __init__(self, app):
+        super().__init__(title="EchoTray Setup")
+        self.app = app
+        # Cap the window width so long hint text doesn't stretch it to the
+        # length of the longest sentence. Height auto-sizes to fit content.
+        self.set_default_size(420, -1)
+        self.set_size_request(360, -1)
+        self.set_border_width(12)
 
-    # Radio buttons: small (default) / base / tiny
-    radio_small = Gtk.RadioButton.new_with_label_from_widget(None, "small - best accuracy (recommended, ~466 MB)")
-    radio_small.set_active(True)
-    box.pack_start(radio_small, False, False, 4)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add(vbox)
 
-    radio_base = Gtk.RadioButton.new_with_label_from_widget(radio_small, "base - faster, good for older systems (~145 MB)")
-    box.pack_start(radio_base, False, False, 4)
+        self.model_light = _StatusLight()
+        sec, body = self._section_container("Whisper Model", self.model_light)
 
-    radio_tiny = Gtk.RadioButton.new_with_label_from_widget(radio_small, "tiny - fastest, for very low-end hardware (~75 MB)")
-    box.pack_start(radio_tiny, False, False, 4)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        grid.attach(Gtk.Label(label="Loaded:", xalign=1.0), 0, 0, 1, 1)
+        self.model_label = Gtk.Label(label="none")
+        self.model_label.set_xalign(0)
+        grid.attach(self.model_label, 1, 0, 1, 1)
 
-    hint = Gtk.Label(label="Tip: you can change this later in ~/.local/share/echotray/.env (MODEL_SIZE).")
-    hint.set_line_wrap(True)
-    box.pack_start(hint, False, False, 6)
+        grid.attach(Gtk.Label(label="Change to:", xalign=1.0), 0, 1, 1, 1)
+        self.model_combo = Gtk.ComboBoxText()
+        for s in self._MODEL_SIZES:
+            self.model_combo.append_text(s)
+        self.model_combo.set_active(0)
+        grid.attach(self.model_combo, 1, 1, 1, 1)
 
-    dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-    dialog.add_button("Download", Gtk.ResponseType.OK)
-    dialog.show_all()
-    dialog.present()
+        self.download_btn = Gtk.Button(label="Download")
+        self.download_btn.connect("clicked", self._on_download)
+        grid.attach(self.download_btn, 2, 1, 1, 1)
 
-    response = dialog.run()
-    chosen = None
-    if response == Gtk.ResponseType.OK:
-        if radio_base.get_active():
-            chosen = "base"
-        elif radio_tiny.get_active():
-            chosen = "tiny"
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_show_text(True)
+        self.progress.set_text("")
+        grid.attach(self.progress, 1, 2, 2, 1)
+        body.pack_start(grid, False, False, 0)
+        vbox.pack_start(sec, False, False, 0)
+
+        # ── Language section (no status light) ───────────────────────────────
+        sec, body = self._section_container("Language")
+        lang_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        lang_grid.attach(Gtk.Label(label="Dictation language:", xalign=1.0), 0, 0, 1, 1)
+        self.lang_combo = Gtk.ComboBoxText()
+        # First entry is auto-detect (empty WHISPER_LANGUAGE); the rest are
+        # common Whisper language codes.
+        self._LANG_OPTIONS = [
+            ("Auto-detect", ""),
+            ("English", "en"),
+            ("French", "fr"),
+            ("German", "de"),
+            ("Spanish", "es"),
+            ("Italian", "it"),
+            ("Portuguese", "pt"),
+            ("Dutch", "nl"),
+        ]
+        for label, _code in self._LANG_OPTIONS:
+            self.lang_combo.append_text(label)
+        self._set_combo_from_value(self.lang_combo, whisper.LANGUAGE or "", self._LANG_OPTIONS, 1)
+        self.lang_combo.connect("changed", self._on_lang_changed)
+        lang_grid.attach(self.lang_combo, 1, 0, 1, 1)
+        body.pack_start(lang_grid, False, False, 0)
+        vbox.pack_start(sec, False, False, 0)
+
+        # ── Paste delay section (no status light) ─────────────────────────────
+        sec, body = self._section_container("Paste delay")
+        paste_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        paste_grid.attach(Gtk.Label(label="Delay (ms):", xalign=1.0), 0, 0, 1, 1)
+        self.paste_spin = Gtk.SpinButton.new_with_range(0, 2000, 50)
+        self.paste_spin.set_value(PASTE_DELAY_MS)
+        self.paste_spin.set_numeric(True)
+        self.paste_spin.connect("value-changed", self._on_paste_delay_changed)
+        paste_grid.attach(self.paste_spin, 1, 0, 1, 1)
+        hint = Gtk.Label(label="Delay between copying the text and pasting it. Increase if the paste comes out blank.")
+        hint.set_line_wrap(True)
+        hint.set_max_width_chars(40)
+        hint.set_xalign(0)
+        paste_grid.attach(hint, 1, 1, 1, 1)
+        body.pack_start(paste_grid, False, False, 0)
+        vbox.pack_start(sec, False, False, 0)
+
+        # ── Max recording length section (no status light) ──────────────────
+        sec, body = self._section_container("Max recording length")
+        rec_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        rec_grid.attach(Gtk.Label(label="Seconds:", xalign=1.0), 0, 0, 1, 1)
+        self.rec_spin = Gtk.SpinButton.new_with_range(10, 3600, 10)
+        self.rec_spin.set_value(whisper.MAX_RECORDING_SECONDS)
+        self.rec_spin.set_numeric(True)
+        self.rec_spin.connect("value-changed", self._on_rec_length_changed)
+        rec_grid.attach(self.rec_spin, 1, 0, 1, 1)
+        hint = Gtk.Label(label="How long a recording can run before it auto-stops.")
+        hint.set_line_wrap(True)
+        hint.set_max_width_chars(40)
+        hint.set_xalign(0)
+        rec_grid.attach(hint, 1, 1, 1, 1)
+        body.pack_start(rec_grid, False, False, 0)
+        vbox.pack_start(sec, False, False, 0)
+
+        self._poll_id = GLib.timeout_add(500, self._poll)
+        self.connect("destroy", self._on_destroy)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+    def _section_container(self, title, light=None):
+        """Return a (frame, body) where body holds the section's fields.
+
+        Uses _RoundedFrame, which draws its own border with cairo - exact,
+        theme-independent wall thickness and rounded corners (Gtk.Frame CSS
+        borders are overridden by themes and don't render reliably). `light` is
+        optional; pass None for a section with no status light.
+        """
+        frame = _RoundedFrame(border_width=2, radius=12)
+
+        # Inner vertical box: header row (status light + title) above the body.
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        header = self._section_header(title, light)
+        header.set_margin_top(8)
+        header.set_margin_start(12)
+        header.set_margin_end(12)
+        inner.pack_start(header, False, False, 0)
+
+        # Body: the caller packs the section's fields here, inside the frame.
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        body.set_margin_start(12)
+        body.set_margin_end(12)
+        body.set_margin_bottom(12)
+        inner.pack_start(body, False, False, 0)
+
+        frame.add(inner)
+        return frame, body
+
+    def _section_header(self, title, light=None):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        if light is not None:
+            box.pack_start(light, False, False, 0)
+        lbl = Gtk.Label(label=title, xalign=0.0)
+        lbl.set_hexpand(True)
+        box.pack_start(lbl, False, False, 0)
+        return box
+
+    def _on_download(self, _btn):
+        size = self.model_combo.get_active_text() or "small"
+        self.app._start_model_download(size)
+
+    # ── settings persistence ─────────────────────────────────────────────────
+    def _set_combo_from_value(self, combo, value, options, default_index):
+        """Select the combo entry whose code matches `value` (or the default)."""
+        for i, (_label, code) in enumerate(options):
+            if code == value:
+                combo.set_active(i)
+                return
+        combo.set_active(default_index)
+
+    def _write_env(self, key, value):
+        """Set `key=value` in the app's .env file (creating/updating the line)."""
+        path = _DOTENV_PATH
+        try:
+            lines = path.read_text().splitlines() if path.exists() else []
+        except OSError:
+            return
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(key + "="):
+                lines[i] = f"{key}={value}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{key}={value}")
+        try:
+            path.write_text("\n".join(lines) + "\n")
+        except OSError:
+            pass
+
+    def _on_lang_changed(self, combo):
+        code = self._LANG_OPTIONS[combo.get_active()][1] if combo.get_active() >= 0 else ""
+        self._write_env("WHISPER_LANGUAGE", code)
+        # Apply live so the next transcription uses the new language.
+        whisper.LANGUAGE = code or None
+
+    def _on_paste_delay_changed(self, spin):
+        value = int(spin.get_value())
+        self._write_env("PASTE_DELAY_MS", str(value))
+        global PASTE_DELAY_MS
+        PASTE_DELAY_MS = value
+
+    def _on_rec_length_changed(self, spin):
+        value = int(spin.get_value())
+        self._write_env("MAX_RECORDING_SECONDS", str(value))
+        whisper.MAX_RECORDING_SECONDS = value
+
+    # ── polling ──────────────────────────────────────────────────────────────
+    def _poll(self):
+        # Green if ANY model is downloaded; show progress if a download is active.
+        downloading = self.app._download_progress["active"]
+        if downloading:
+            frac = self.app._download_progress["fraction"]
+            self.progress.set_fraction(frac)
+            self.progress.set_text(f"{int(frac * 100)}%")
+            self.download_btn.set_sensitive(False)
         else:
-            chosen = "small"
-    dialog.destroy()
-    return chosen
+            self.progress.set_fraction(0)
+            self.progress.set_text("")
+            self.download_btn.set_sensitive(True)
+        downloaded = whisper.downloaded_model_sizes()
+        model_ready = bool(downloaded)
+        self.model_light.set_ok(model_ready)
+        # Show the downloaded model(s); prefer the configured/active size.
+        if model_ready:
+            shown = self.app.model_size if self.app.model_size in downloaded else downloaded[0]
+            self.model_label.set_text(shown)
+        else:
+            self.model_label.set_text("none")
 
+        return True  # keep polling
 
-# ── Prerequisite Checks ───────────────────────────────────────────────────────
-
-def check_prerequisites():
-    """Return a list of error strings (empty = all good). Does not exit."""
-    errors = []
-
-    # Check wl-copy
-    if not shutil.which("wl-copy"):
-        errors.append(
-            "'wl-copy' not found. Install it with:\n"
-            "    sudo apt install wl-clipboard"
-        )
-
-    # Check the helper daemon is running (paste-only service; no config needed)
-    try:
-        client = helper_client.HelperClient()
-        client.send_paste_probe()  # probe the socket (no-op paste is not sent; just connect)
-    except helper_client.HelperError as e:
-        errors.append(
-            "The EchoTray helper daemon is not running:\n"
-            f"    {e}\n\n"
-            "Start it with:\n"
-            "    sudo systemctl start echotray-helperd\n"
-            "or re-run setup.sh."
-        )
-
-    # Check audio input
-    try:
-        sd.query_devices(kind="input")
-    except sd.PortAudioError:
-        errors.append(
-            "No audio input device found.\n"
-            "  Check that your microphone is connected and PipeWire is running."
-        )
-
-    return errors
+    def _on_destroy(self, _widget):
+        if self._poll_id is not None:
+            GLib.source_remove(self._poll_id)
+            self._poll_id = None
+        # Clear the app's cached reference so the next Setup menu click builds a
+        # fresh window. Without this, reopening after close calls show_all()/
+        # present() on a destroyed widget, which renders a tiny empty square.
+        if self.app._setup_window is self:
+            self.app._setup_window = None
 
 
 # ── Text Pasting ──────────────────────────────────────────────────────────────
@@ -365,7 +526,14 @@ class DictationApp:
         self.recorder = None
         self._recording_timeout_id = None
         self._record_start = None  # monotonic time recording began (for total-time report)
-        self._check_item = None
+        self._setup_window = None
+        # App-owned model download state, polled by the setup window. The
+        # download is owned by the app (not the window) so it continues even if
+        # the window closes.
+        self.model_size = whisper.MODEL_SIZE
+        self._download_thread = None
+        self._download_result = {"ok": False, "error": None}
+        self._download_progress = {"active": False, "fraction": 0.0, "bytes": 0, "size": None}
 
         # Set up tray indicator using our custom colored icons (absolute paths)
         self.indicator = appindicator.Indicator.new(
@@ -399,22 +567,10 @@ class DictationApp:
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        # Check status - re-runs the environment checks (helper daemon, wl-copy,
-        # audio) without exiting. Useful when dictation doesn't work: the tray
-        # stays up and this tells you what's wrong.
-        check_item = Gtk.MenuItem(label="Check status")
-        check_item.connect("activate", self._on_check_status)
-        menu.append(check_item)
-        self._check_item = check_item
-
-        menu.append(Gtk.SeparatorMenuItem())
-
-        # Install/download the Whisper model (only needed on first run, or after
-        # the model dir was cleared). Hidden once the model is ready.
-        install_item = Gtk.MenuItem(label="Install model…")
-        install_item.connect("activate", self._install_model)
-        menu.append(install_item)
-        self._install_item = install_item
+        # Setup - change the Whisper model size (or install it on first run).
+        setup_item = Gtk.MenuItem(label="Setup...")
+        setup_item.connect("activate", self._on_setup)
+        menu.append(setup_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -439,81 +595,59 @@ class DictationApp:
         """Left-click on the tray icon toggles recording (one-click dictation)."""
         self._toggle()
 
-    def _on_check_status(self, _widget):
-        """Re-run the environment checks and report the result as a notification."""
-        errors = check_prerequisites()
-        if errors:
-            notify("Status", "Problems found:\n" + "\n".join(errors), urgency="critical")
-        else:
-            notify("Status", "All checks passed.")
+    def _on_setup(self, _widget):
+        """Open the non-modal setup window (single Whisper Model section).
 
-    def _install_model(self, _widget):
-        """Download (if needed) and load the Whisper model, then enable dictation.
-
-        Runs on the GTK main thread (it is a menu callback), so all dialog work
-        happens here. The slow network download and model load run in background
-        threads. On success flips the app to ready; on failure/cancel the tray
-        stays up (disabled) and the user can retry.
+        The window is non-modal so the tray stays usable. The model download is
+        owned by the app and continues even if the window is closed.
         """
-        if self.model is not None:
-            return  # already installed
-        model_size = whisper.MODEL_SIZE
+        if self._setup_window is None:
+            self._setup_window = SetupWindow(self)
+        self._setup_window.show_all()
+        self._setup_window.present()
 
-        if whisper.model_needs_download(model_size):
-            chosen = show_model_choice_dialog()
-            if chosen is None:
-                print("Model selection cancelled by user.")
-                return
-            model_size = chosen
-            print(f"Downloading model '{model_size}' with progress UI...")
-            dialog, progress_cb = show_download_progress_dialog(model_size)
+    def _start_model_download(self, size):
+        """Start (or restart) a background model download owned by the app.
 
-            result = {"ok": False, "error": None}
-            dialog_done = {"closed": False}
+        The download is owned by the app, not the setup window, so it continues
+        even if the window is closed. Progress is written to
+        self._download_progress for the setup window to poll. When it finishes,
+        the model is loaded and the tray flips to ready.
+        """
+        if self._download_thread is not None and self._download_thread.is_alive():
+            return  # already downloading
+        self.model_size = size
+        self._download_result = {"ok": False, "error": None}
+        self._download_progress = {"active": True, "fraction": 0.0, "bytes": 0, "size": size}
 
-            def _download_job():
-                try:
-                    # progress_cb touches GTK widgets -> must run on the main thread.
-                    def cb(fraction, bytes_done):
-                        GLib.idle_add(progress_cb, fraction, bytes_done)
-                    whisper.download_model(model_size, progress_cb=cb)
-                    result["ok"] = True
-                except Exception as e:  # noqa: BLE001
-                    result["error"] = e
-                def _close():
-                    if not dialog_done["closed"]:
-                        dialog_done["closed"] = True
-                        dialog.destroy()
-                GLib.idle_add(_close)
-
-            threading.Thread(target=_download_job, daemon=True).start()
-
-            # Block the main loop on the progress dialog; it auto-closes when the
-            # download thread finishes. The download itself runs off-thread.
-            dialog.run()
-            dialog_done["closed"] = True
-            dialog.destroy()
-
-            if not result["ok"]:
-                if result["error"] is not None:
-                    print(f"[ERROR] Model download failed: {result['error']}")
-                    notify("EchoTray", f"Model download failed: {result['error']}", urgency="critical")
-                else:
-                    print("Download cancelled by user.")
-                return
-
-        # Slow model load runs off the main thread; enable the app when done.
-        app = self
-        def _load_job():
+        def _job():
             try:
-                model = whisper.load_model(model_size)
-            except Exception as e:
-                print(f"[ERROR] Model load failed: {e}")
-                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
-                return
-            GLib.idle_add(app._activate_model, model)
+                def cb(fraction, bytes_done):
+                    self._download_progress["fraction"] = fraction
+                    self._download_progress["bytes"] = bytes_done
+                whisper.download_model(size, progress_cb=cb)
+                self._download_result["ok"] = True
+            except Exception as e:  # noqa: BLE001
+                self._download_result["error"] = e
+            finally:
+                self._download_progress["active"] = False
+                self._download_progress["fraction"] = 1.0
+                if self._download_result["ok"]:
+                    # Load the freshly downloaded model and enable the app.
+                    try:
+                        model = whisper.load_model(size)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[ERROR] Model load failed: {e}")
+                        GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
+                        return
+                    GLib.idle_add(self._activate_model, model)
+                else:
+                    err = self._download_result["error"]
+                    print(f"[ERROR] Model download failed: {err}")
+                    GLib.idle_add(notify, "EchoTray", f"Model download failed: {err}", "audio-input-microphone", "critical")
 
-        threading.Thread(target=_load_job, daemon=True).start()
+        self._download_thread = threading.Thread(target=_job, daemon=True)
+        self._download_thread.start()
 
     def _activate_model(self, model):
         """Set the loaded model on the app and flip it to ready (main thread)."""
@@ -540,11 +674,6 @@ class DictationApp:
         try:
             self.toggle_item.set_sensitive(True)
             self.toggle_item.set_label("Start recording")
-        except Exception:
-            pass
-        try:
-            # The model is installed now; hide the Install item.
-            self._install_item.hide()
         except Exception:
             pass
 
@@ -687,7 +816,11 @@ class DictationApp:
         elif self.state == "TRANSCRIBING":
             self.indicator.set_icon_full(ICON_PROCESSING, "Transcribing")
         elif self.state == "IDLE":
-            self.indicator.set_icon_full(ICON_IDLE, "Idle")
+            # No model loaded yet -> keep the grey disabled icon, not green.
+            if self.model is None:
+                self.indicator.set_icon_full(ICON_DISABLED, "Waiting for model")
+            else:
+                self.indicator.set_icon_full(ICON_IDLE, "Idle")
         return True  # keep the timer running
 
 
@@ -733,7 +866,7 @@ def main():
     # missing model or missing environment checks - the tray is always up.
     # If the model is already cached, load it in the background and flip to
     # ready. Only if it's NOT cached do we stay disabled and wait for the user
-    # to click "Install model…".
+    # to install it via the Setup menu.
     app = DictationApp(model=None)
     app.set_disabled()
 

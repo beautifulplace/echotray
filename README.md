@@ -163,6 +163,11 @@ The tray icon's color shows the state: **green** = ready, **red** = recording,
 Right-clicking the tray icon opens a menu with:
 - **Status** - shows the current app state (Idle / Recording / Transcribing)
 - **Start/Stop recording** - same as left-clicking the icon
+- **Setup...** - opens a window to install the Whisper model (first run) or
+  change the model size (tiny/base/small/medium/large-v3). A green light means
+  a model is loaded; red means none. Below the model section are simple
+  selectors for the dictation language, the paste delay, and the max recording
+  length.
 - **About** - app name, version, and description
 - **Quit** - exits the app
 
