@@ -56,8 +56,10 @@ def _download_file(url, dest, progress_cb=None, chunk_size=1 << 20):
     """Stream a file from `url` to `dest`, reporting (fraction, bytes) to progress_cb."""
     import urllib.request
 
-    req = urllib.request.Request(url, headers={"User-Agent": "echotray/3.2"})
-    with urllib.request.urlopen(req) as resp:
+    req = urllib.request.Request(url, headers={"User-Agent": "echotray"})
+    # timeout bounds each socket operation (connect + each read), so a stalled
+    # connection can't hang the download forever.
+    with urllib.request.urlopen(req, timeout=30) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with open(dest, "wb") as f:
@@ -73,19 +75,27 @@ def _download_file(url, dest, progress_cb=None, chunk_size=1 << 20):
     return dest
 
 
-def model_needs_download(size):
-    """True if the model files aren't fully cached locally yet."""
+def _model_complete(size):
+    """True if all required model files are present and non-empty."""
     d = _model_local_dir(size)
     if not os.path.isdir(d):
-        return True
-    # model.bin is the large file; its presence implies a complete download.
-    return not os.path.isfile(os.path.join(d, "model.bin"))
+        return False
+    for name in _MODEL_FILES:
+        p = os.path.join(d, name)
+        if not os.path.isfile(p) or os.path.getsize(p) == 0:
+            return False
+    return True
+
+
+def model_needs_download(size):
+    """True if the model files aren't fully cached locally yet."""
+    return not _model_complete(size)
 
 
 def downloaded_model_sizes():
     """Return the list of model sizes that are fully downloaded/cached.
 
-    Scans the model cache root for any size whose model.bin is present, so the
+    Scans the model cache root for any size whose files are all present, so the
     app can detect a model the user already downloaded even if it isn't the
     configured default size.
     """
@@ -93,8 +103,7 @@ def downloaded_model_sizes():
     if not os.path.isdir(MODEL_CACHE_ROOT):
         return found
     for name in os.listdir(MODEL_CACHE_ROOT):
-        d = os.path.join(MODEL_CACHE_ROOT, name)
-        if os.path.isdir(d) and os.path.isfile(os.path.join(d, "model.bin")):
+        if _model_complete(name):
             found.append(name)
     return found
 
@@ -102,7 +111,9 @@ def downloaded_model_sizes():
 def download_model(size, progress_cb=None):
     """Download (or ensure cached) the faster-whisper model for `size`.
 
-    Reports progress via progress_cb(fraction_completed, bytes_done). Returns the
+    Reports progress via progress_cb(fraction_completed, bytes_done) where the
+    fraction is across ALL files (not per-file), so the progress bar advances
+    smoothly from 0 to 100% once instead of resetting for each file. Returns the
     local directory containing the model, which can be passed to WhisperModel().
     """
     repo = _MODEL_REPOS.get(size, "small")
@@ -110,13 +121,52 @@ def download_model(size, progress_cb=None):
     d = _model_local_dir(size)
     os.makedirs(d, exist_ok=True)
 
+    # Determine which files still need downloading and their total size, so we
+    # can report overall progress. Files already cached are skipped.
+    to_download = []
     for name in _MODEL_FILES:
         dest = os.path.join(d, name)
         if os.path.isfile(dest) and os.path.getsize(dest) > 0:
             continue  # already cached
+        to_download.append(name)
+
+    if not to_download:
+        return d
+
+    # Fetch each file's size with a HEAD request so we can compute a true
+    # overall fraction. If a HEAD fails, fall back to per-file progress.
+    sizes = {}
+    total_bytes = 0
+    for name in to_download:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"{base_url}/{name}", method="HEAD", headers={"User-Agent": "echotray"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                n = int(resp.headers.get("Content-Length") or 0)
+                sizes[name] = n
+                total_bytes += n
+        except Exception:
+            sizes[name] = 0
+
+    done_bytes = 0
+    for name in to_download:
+        dest = os.path.join(d, name)
         tmp = dest + ".part"
-        _download_file(f"{base_url}/{name}", tmp, progress_cb)
+
+        def _file_cb(fraction, bytes_done):
+            # Convert per-file progress into overall progress.
+            if total_bytes > 0:
+                overall = (done_bytes + bytes_done) / total_bytes
+            else:
+                overall = fraction
+            if progress_cb:
+                progress_cb(overall, done_bytes + bytes_done)
+
+        _download_file(f"{base_url}/{name}", tmp, _file_cb)
         os.replace(tmp, dest)
+        done_bytes += sizes.get(name, 0)
     return d
 
 
@@ -137,7 +187,7 @@ def load_model(size=None):
 
     # Load from our local cache if present; otherwise let faster-whisper download.
     local_dir = _model_local_dir(size)
-    if os.path.isdir(local_dir) and os.path.isfile(os.path.join(local_dir, "model.bin")):
+    if _model_complete(size):
         model = WhisperModel(local_dir, device=device, compute_type=compute_type)
     else:
         model = WhisperModel(size, device=device, compute_type=compute_type)
@@ -171,9 +221,23 @@ class AudioRecorder:
         self.stream.start()
 
     def stop(self):
-        self.stream.stop()
-        self.stream.close()
+        # Stop/close the stream in a background thread with a timeout. A wedged
+        # audio device (e.g. left in a bad state after a prior crash) can block
+        # stream.stop()/close() forever; running it off-thread with a bounded
+        # join means a stuck device degrades to "return what we captured"
+        # instead of freezing the whole app (tray unresponsive, can't quit).
+        stream = self.stream
         self.stream = None
+        if stream is not None:
+            def _teardown():
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+            t = threading.Thread(target=_teardown, daemon=True)
+            t.start()
+            t.join(timeout=3.0)
         if not self.chunks:
             return np.array([], dtype="float32")
         audio = np.concatenate(self.chunks, axis=0)

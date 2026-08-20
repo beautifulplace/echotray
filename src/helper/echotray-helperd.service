@@ -1,5 +1,5 @@
 [Unit]
-Description=EchoTray privileged input daemon (hotkey + paste injection)
+Description=EchoTray privileged input daemon (paste injection)
 Documentation=file:///usr/local/share/doc/echotray/README.md
 After=local-fs.target
 

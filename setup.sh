@@ -33,6 +33,9 @@ sudo bash "$SCRIPT_DIR/install-helper.sh"
 echo ""
 echo "[3/4] Installing app to $INSTALL_DIR ..."
 mkdir -p "$APP_DIR"
+# Remove any prior copy first so `cp -r src` doesn't nest into src/src/ on a
+# re-run (cp -r into an existing dir creates src/src/...).
+rm -rf "$APP_DIR/src" "$APP_DIR/assets"
 cp -r "$SCRIPT_DIR/src" "$APP_DIR/src"
 cp -r "$SCRIPT_DIR/assets" "$APP_DIR/assets"
 cp "$SCRIPT_DIR/requirements.txt" "$APP_DIR/requirements.txt"
