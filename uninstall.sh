@@ -13,9 +13,12 @@ INSTALL_DIR="$HOME/.local/share/echotray"
 echo "=== EchoTray uninstall ==="
 
 # 1. Stop any running GUI
-if pgrep -f "echotray/app/src/app.py" >/dev/null 2>&1 || pgrep -f "src/app.py" >/dev/null 2>&1; then
+# Match ONLY echotray paths (install dir and git-clone dev path). A broad
+# "src/app.py" pattern would also match EchoTalk's
+# ~/.local/share/echotalk/app/src/app.py and kill it too.
+if pgrep -f "echotray/app/src/app.py" >/dev/null 2>&1 || pgrep -f "echotray/src/app.py" >/dev/null 2>&1; then
     pkill -f "echotray/app/src/app.py" 2>/dev/null || true
-    pkill -f "src/app.py" 2>/dev/null || true
+    pkill -f "echotray/src/app.py" 2>/dev/null || true
     echo "  Stopped running GUI."
 fi
 

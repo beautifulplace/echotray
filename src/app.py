@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.7"
+__version__ = "2.0.8"
 
 import os
 import pathlib
@@ -41,6 +41,31 @@ load_dotenv()
 # ~/.local/share/echotray/.env. load_dotenv() finds it by searching upward
 # from this file; _DOTENV_PATH is the same location for writing settings.
 _DOTENV_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / ".env"
+
+
+def _write_env(key, value):
+    """Set `key=value` in the app's .env file (creating/updating the line).
+
+    Used by both the Setup window (for the selector settings) and the app (for
+    the model size), so any setting changed in the UI persists across restarts.
+    """
+    path = _DOTENV_PATH
+    try:
+        lines = path.read_text().splitlines() if path.exists() else []
+    except OSError:
+        return
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(key + "="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    try:
+        path.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass
 
 # Startup log: everything printed (and any traceback) is also written here, so
 # launching from a desktop icon (no terminal) still leaves a record of what
@@ -366,41 +391,21 @@ class SetupWindow(Gtk.Window):
                 return
         combo.set_active(default_index)
 
-    def _write_env(self, key, value):
-        """Set `key=value` in the app's .env file (creating/updating the line)."""
-        path = _DOTENV_PATH
-        try:
-            lines = path.read_text().splitlines() if path.exists() else []
-        except OSError:
-            return
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith(key + "="):
-                lines[i] = f"{key}={value}"
-                found = True
-                break
-        if not found:
-            lines.append(f"{key}={value}")
-        try:
-            path.write_text("\n".join(lines) + "\n")
-        except OSError:
-            pass
-
     def _on_lang_changed(self, combo):
         code = self._LANG_OPTIONS[combo.get_active()][1] if combo.get_active() >= 0 else ""
-        self._write_env("WHISPER_LANGUAGE", code)
+        _write_env("WHISPER_LANGUAGE", code)
         # Apply live so the next transcription uses the new language.
         whisper.LANGUAGE = code or None
 
     def _on_paste_delay_changed(self, spin):
         value = int(spin.get_value())
-        self._write_env("PASTE_DELAY_MS", str(value))
+        _write_env("PASTE_DELAY_MS", str(value))
         global PASTE_DELAY_MS
         PASTE_DELAY_MS = value
 
     def _on_rec_length_changed(self, spin):
         value = int(spin.get_value())
-        self._write_env("MAX_RECORDING_SECONDS", str(value))
+        _write_env("MAX_RECORDING_SECONDS", str(value))
         whisper.MAX_RECORDING_SECONDS = value
 
     # ── polling ──────────────────────────────────────────────────────────────
@@ -527,6 +532,7 @@ class DictationApp:
         self._recording_timeout_id = None
         self._record_start = None  # monotonic time recording began (for total-time report)
         self._setup_window = None
+        self._about_dialog = None
         # App-owned model download state, polled by the setup window. The
         # download is owned by the app (not the window) so it continues even if
         # the window closes.
@@ -617,6 +623,10 @@ class DictationApp:
         if self._download_thread is not None and self._download_thread.is_alive():
             return  # already downloading
         self.model_size = size
+        # Persist the chosen size so it survives a restart (otherwise main()
+        # reloads the old configured size on next launch).
+        _write_env("MODEL_SIZE", size)
+        whisper.MODEL_SIZE = size
         self._download_result = {"ok": False, "error": None}
         self._download_progress = {"active": True, "fraction": 0.0, "bytes": 0, "size": size}
 
@@ -701,7 +711,13 @@ class DictationApp:
         self.status_item.set_label("Status: Transcribing...")
 
     def _on_about(self, _widget):
+        # Cache the dialog so repeated clicks reuse it instead of building a
+        # new one each time (and leaking the old one).
+        if self._about_dialog is not None:
+            self._about_dialog.present()
+            return
         dialog = Gtk.AboutDialog()
+        self._about_dialog = dialog
         dialog.set_program_name("EchoTray")
         dialog.set_version(__version__)
         # Use the same icon as the tray (icon-idle.svg) so the About dialog and
@@ -730,7 +746,7 @@ class DictationApp:
         # blocks the main loop, which would freeze the tray icon - so recording
         # couldn't be stopped and the app couldn't be quit while About was open.
         dialog.set_modal(False)
-        dialog.connect("response", lambda d, _r: d.destroy())
+        dialog.connect("response", self._on_about_response)
         dialog.show()
         dialog.present()
         # The About dialog's comments text view grabs keyboard focus and shows a
@@ -738,7 +754,24 @@ class DictationApp:
         # it appears so no cursor is shown.
         dialog.connect("show", lambda d: d.set_focus(None))
 
+    def _on_about_response(self, dialog, _response):
+        # Clear the cached reference so the next About click builds a fresh
+        # dialog (a destroyed widget can't be re-presented).
+        if self._about_dialog is dialog:
+            self._about_dialog = None
+        dialog.destroy()
+
     def _on_quit(self, _widget):
+        # Stop any active recorder before quitting so the audio device is
+        # released cleanly (a wedged device is handled by recorder.stop()'s
+        # bounded teardown). Guard against None so quit always works.
+        recorder = self.recorder
+        self.recorder = None
+        if recorder is not None:
+            try:
+                recorder.stop()
+            except Exception:
+                pass
         self.loop.quit()
 
     def _auto_stop(self):
@@ -835,6 +868,15 @@ def _enable_log_file():
         os.dup2(log_fd, 2)  # stderr
         if log_fd > 2:
             os.close(log_fd)
+        # Force LINE buffering on stdout/stderr. When redirected to a file,
+        # Python block-buffers stdout (~8KB), so print() diagnostics pile up in
+        # the buffer and never reach the log until the process exits. This
+        # flushes on every newline so the log is actually useful for debugging.
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(line_buffering=True)
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
     except OSError:
         pass
 

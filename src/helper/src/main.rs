@@ -95,6 +95,8 @@ const SO_PEERCRED: c_int = 17;
 // fcntl flags
 const O_WRONLY: c_int = 1;
 const O_NONBLOCK: c_int = 0o4000;
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
 
 const SOCK_PATH: &str = "/run/echotray.sock";
 const MAX_CLIENTS: usize = 8;
@@ -113,6 +115,7 @@ extern "C" {
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn open(path: *const u8, flags: c_int) -> c_int;
     fn ioctl(fd: c_int, request: u64, ...) -> c_int;
+    fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
     fn usleep(usec: u32) -> c_int;
     fn strerror(errnum: c_int) -> *const u8;
 }
@@ -173,7 +176,9 @@ impl UInput {
             unsafe { close(fd) };
             return Err(format!("UI_SET_EVBIT: {}", strerror_str(errno())));
         }
-        // We only need to inject Ctrl+V, but enable a small range to be safe.
+        // We only ever inject Ctrl+V, but enable a range of key codes so the
+        // virtual device is a well-formed keyboard (some compositors expect a
+        // populated key bitmap). The daemon never emits anything but Ctrl+V.
         for k in KEY_ESC..=KEY_MICMUTE {
             unsafe { ioctl(fd, UI_SET_KEYBIT, k as c_int) };
         }
@@ -313,24 +318,43 @@ fn peer_is_nonroot(fd: RawFd) -> bool {
     cred.uid != 0
 }
 
-/// Read and handle one client connection's messages. Returns when the client
-/// disconnects.
-fn handle_client(cfd: RawFd, uinput: &Option<UInput>) {
-    let mut buf: Vec<u8> = Vec::new();
+/// Set a socket to non-blocking mode so a stalled client can't block the whole
+/// daemon (a blocking read() on a client that connects but never sends a
+/// newline would otherwise freeze every other client and new connections).
+fn set_nonblocking(fd: RawFd) -> bool {
+    unsafe {
+        let flags = fcntl(fd, F_GETFL);
+        if flags < 0 {
+            return false;
+        }
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
+    }
+}
+
+/// Read and handle one client connection's messages. Returns true when the
+/// connection should be closed (EOF or a real error), false when it should stay
+/// open (a non-blocking read would block - more data may arrive later). The
+/// caller's poll loop re-invokes us when the socket is readable again.
+fn handle_client(cfd: RawFd, uinput: &Option<UInput>, buf: &mut Vec<u8>) -> bool {
     loop {
-        // Read until we have a full newline-terminated message or EOF.
-        let mut got = false;
-        while !buf.contains(&b'\n') {
-            let mut chunk = [0u8; 4096];
-            let n = unsafe { read(cfd, chunk.as_mut_ptr(), chunk.len()) };
-            if n <= 0 {
-                return; // closed or error
+        // Read available data (non-blocking). EAGAIN/EWOULDBLOCK means no more
+        // data right now - return false so poll can wait for the next chunk.
+        let mut chunk = [0u8; 4096];
+        let n = unsafe { read(cfd, chunk.as_mut_ptr(), chunk.len()) };
+        if n == 0 {
+            return true; // EOF - client disconnected
+        }
+        if n < 0 {
+            let e = errno();
+            if e == 11 || e == 4 {
+                // EAGAIN/EWOULDBLOCK (11) or EINTR (4): no data now, retry later.
+                return false;
             }
-            buf.extend_from_slice(&chunk[..n as usize]);
-            got = true;
-            if buf.len() > 8192 {
-                buf.clear(); // defensive: drop oversized input
-            }
+            return true; // real error - drop the connection
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+        if buf.len() > 8192 {
+            buf.clear(); // defensive: drop oversized input
         }
 
         // Process all complete lines in the buffer.
@@ -348,10 +372,6 @@ fn handle_client(cfd: RawFd, uinput: &Option<UInput>) {
                     }
                 }
             }
-        }
-
-        if !got {
-            // No new data; loop again to read more.
         }
     }
 }
@@ -376,6 +396,9 @@ fn main() {
     };
 
     let mut clients: Vec<RawFd> = vec![-1; MAX_CLIENTS];
+    // Per-client read buffers, so a partial message survives across poll
+    // iterations (a client may send a message in multiple chunks).
+    let mut buffers: Vec<Vec<u8>> = (0..MAX_CLIENTS).map(|_| Vec::new()).collect();
 
     eprintln!(
         "echotray-helperd: ready ({}) - waiting for paste requests",
@@ -435,7 +458,13 @@ fn main() {
                         }
                     }
                     match slot {
-                        Some(i) => clients[i] = cfd,
+                        Some(i) => {
+                            // Non-blocking so a stalled client can't freeze the
+                            // daemon; poll drives reads instead.
+                            set_nonblocking(cfd);
+                            clients[i] = cfd;
+                            buffers[i].clear();
+                        }
                         None => {
                             let _ = unsafe { close(cfd) };
                         }
@@ -450,10 +479,13 @@ fn main() {
         // handle client I/O
         for i in 0..MAX_CLIENTS {
             if clients[i] >= 0 && (pfds[idx].revents & (POLLIN | POLLHUP | POLLERR)) != 0 {
-                handle_client(clients[i], &uinput);
-                // handle_client returns on EOF/error; drop the connection.
-                let _ = unsafe { close(clients[i]) };
-                clients[i] = -1;
+                let close_conn = handle_client(clients[i], &uinput, &mut buffers[i]);
+                if close_conn {
+                    // EOF or error - drop the connection.
+                    let _ = unsafe { close(clients[i]) };
+                    clients[i] = -1;
+                    buffers[i].clear();
+                }
             }
             idx += 1;
         }

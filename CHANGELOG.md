@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.0.8] - 2026-08-19
+
+### Fixed
+- **Model size change now persists across restarts.** Choosing a new model size
+  in Setup now writes `MODEL_SIZE` to `.env` and updates the in-memory size, so
+  the app reloads the chosen size on next launch instead of reverting.
+- **Uninstall no longer kills other dictation apps.** The broad
+  `pkill -f "src/app.py"` pattern was removed; uninstall now matches only
+  echotray paths.
+- **Log file now flushes line-by-line.** stdout/stderr are reconfigured to
+  line-buffered after the log redirect, so diagnostics actually reach
+  `/tmp/echotray.log` instead of sitting in Python's block buffer.
+- **Recorder stop can no longer freeze the app.** `AudioRecorder.stop()` runs
+  the stream teardown in a background thread with a 3s timeout, so a wedged
+  audio device degrades gracefully instead of hanging the tray.
+- **Model completeness now checks all files.** The download/load checks verify
+  every required file (config.json, tokenizer.json, vocabulary.txt, model.bin)
+  is present and non-empty, not just `model.bin`.
+- **Download has a timeout.** A 30s socket timeout prevents a stalled
+  connection from hanging the download forever.
+- **Progress bar advances smoothly.** Download progress is reported across all
+  files instead of resetting to 0% for each file.
+- **Helper daemon no longer blocks on a stalled client.** Accepted sockets are
+  non-blocking with per-client buffers, so a client that connects but never
+  sends a newline can't freeze the daemon.
+
+### Changed
+- **About dialog is cached** and reused across clicks.
+- **Quit stops an active recorder** cleanly before exiting.
+- **setup.sh is idempotent** - it removes any prior copy before re-copying, so
+  a re-run no longer nests into `src/src/`.
+- **Removed stale "hotkey" wording** from the daemon's Cargo.toml description
+  and systemd unit (the daemon is paste-only).
+
 ## [2.0.7] - 2026-08-19
 
 ### Added
