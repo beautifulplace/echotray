@@ -29,6 +29,11 @@ LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en") or None  # empty string → None 
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))
 CHANNELS = int(os.getenv("CHANNELS", "1"))
 MAX_RECORDING_SECONDS = int(os.getenv("MAX_RECORDING_SECONDS", "300"))
+# Number of CPU threads CTranslate2 uses for transcription. CTranslate2 defaults
+# to one thread per core, and each thread carries stack + buffers, so capping it
+# trims resident memory and often improves CPU latency by avoiding thread
+# thrash. 4 is a good balance for a laptop.
+CPU_THREADS = int(os.getenv("CPU_THREADS", "4"))
 
 
 # ── Whisper Model ─────────────────────────────────────────────────────────────
@@ -188,9 +193,9 @@ def load_model(size=None):
     # Load from our local cache if present; otherwise let faster-whisper download.
     local_dir = _model_local_dir(size)
     if _model_complete(size):
-        model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+        model = WhisperModel(local_dir, device=device, compute_type=compute_type, cpu_threads=CPU_THREADS)
     else:
-        model = WhisperModel(size, device=device, compute_type=compute_type)
+        model = WhisperModel(size, device=device, compute_type=compute_type, cpu_threads=CPU_THREADS)
 
     elapsed = time.monotonic() - start
     print(f"done ({elapsed:.1f}s)")

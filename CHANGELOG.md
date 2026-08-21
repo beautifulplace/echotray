@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.0.9] - 2026-08-20
+
+### Fixed
+- **Tray icon stuck amber after a no-speech stop.** A fast no-speech stop
+  (red -> amber -> green in ~100ms) finished before the poll timer fired, so the
+  icon guard saw "no change" and skipped the re-assert, leaving the tray stuck on
+  amber. The state setters now update the tracked icon, and the timer re-asserts
+  every tick during the transient states plus a short post-idle window, so a
+  dropped icon self-heals without reintroducing the idle memory leak.
+- **Memory leak while idle.** The 500ms icon poll timer called `set_icon_full()`
+  every tick, which reloads the icon from disk on each call and leaks memory
+  continuously. The timer now only calls it when the icon actually changes, so
+  idle RSS stays flat.
+
+### Changed
+- **Reduced memory footprint via thread cap.** CTranslate2 (Whisper) now
+  defaults to 4 CPU threads instead of one per core, which trims resident memory
+  and often improves CPU latency by avoiding thread thrash. Configurable via
+  `CPU_THREADS` in `.env`.
+
 ## [2.0.8] - 2026-08-19
 
 ### Fixed
