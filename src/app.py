@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.8"
+__version__ = "2.0.9"
 
 import os
 import pathlib
@@ -533,6 +533,13 @@ class DictationApp:
         self._record_start = None  # monotonic time recording began (for total-time report)
         self._setup_window = None
         self._about_dialog = None
+        # Last icon path, so the 500ms poll timer only calls set_icon_full()
+        # when the icon actually changes (set_icon_full reloads the icon from
+        # disk and leaks memory if called every tick).
+        self._last_icon = None
+        # Monotonic deadline for a short post-idle re-assert window (see
+        # _update_icon). Bounded, so the idle memory leak stays fixed.
+        self._idle_assert_until = 0.0
         # App-owned model download state, polled by the setup window. The
         # download is owned by the app (not the window) so it continues even if
         # the window closes.
@@ -670,6 +677,7 @@ class DictationApp:
         """Pre-model state: grey icon, Start Recording greyed out."""
         self.state = "IDLE"
         self.indicator.set_icon_full(ICON_DISABLED, "Waiting for model")
+        self._last_icon = ICON_DISABLED
         self.status_item.set_label("Status: waiting for model")
         try:
             self.toggle_item.set_sensitive(False)
@@ -680,6 +688,7 @@ class DictationApp:
         """Post-model state: green idle icon, Start Recording enabled."""
         self.state = "IDLE"
         self.indicator.set_icon_full(ICON_IDLE, "Idle")
+        self._last_icon = ICON_IDLE
         self.status_item.set_label("Status: Idle")
         try:
             self.toggle_item.set_sensitive(True)
@@ -690,6 +699,11 @@ class DictationApp:
     def set_idle(self):
         self.state = "IDLE"
         self.indicator.set_icon_full(ICON_IDLE, "Idle")
+        self._last_icon = ICON_IDLE
+        # Open a short re-assert window so the tray can't stay stuck on the
+        # previous (amber/red) icon after a fast no-speech stop. Bounded, so
+        # the idle memory leak stays fixed.
+        self._idle_assert_until = time.monotonic() + 2.0
         self.status_item.set_label("Status: Idle")
         try:
             self.toggle_item.set_label("Start recording")
@@ -699,6 +713,7 @@ class DictationApp:
     def set_recording(self):
         self.state = "RECORDING"
         self.indicator.set_icon_full(ICON_RECORDING, "Recording")
+        self._last_icon = ICON_RECORDING
         self.status_item.set_label("Status: Recording...")
         try:
             self.toggle_item.set_label("Stop recording")
@@ -708,6 +723,7 @@ class DictationApp:
     def set_transcribing(self):
         self.state = "TRANSCRIBING"
         self.indicator.set_icon_full(ICON_PROCESSING, "Transcribing")
+        self._last_icon = ICON_PROCESSING
         self.status_item.set_label("Status: Transcribing...")
 
     def _on_about(self, _widget):
@@ -843,17 +859,36 @@ class DictationApp:
         self.loop.run()
 
     def _update_icon(self):
-        """Re-assert the tray icon from the current state (poll timer)."""
+        """Re-assert the tray icon from the current state (poll timer).
+
+        Only calls set_icon_full() when the icon actually changes: set_icon_full
+        reloads the icon from disk on every call, so calling it every 500ms
+        leaks memory continuously (the app's RSS drifts up while idle).
+
+        The transient states (RECORDING/TRANSCRIBING) re-assert every tick so a
+        dropped icon self-heals immediately. IDLE re-asserts only during a short
+        post-idle window (set by set_idle) so a fast no-speech stop can't leave
+        the tray stuck on amber/red; after that window it goes quiet to keep the
+        idle memory leak fixed.
+        """
         if self.state == "RECORDING":
-            self.indicator.set_icon_full(ICON_RECORDING, "Recording")
+            want = ICON_RECORDING
         elif self.state == "TRANSCRIBING":
-            self.indicator.set_icon_full(ICON_PROCESSING, "Transcribing")
+            want = ICON_PROCESSING
         elif self.state == "IDLE":
             # No model loaded yet -> keep the grey disabled icon, not green.
-            if self.model is None:
-                self.indicator.set_icon_full(ICON_DISABLED, "Waiting for model")
-            else:
-                self.indicator.set_icon_full(ICON_IDLE, "Idle")
+            want = ICON_DISABLED if self.model is None else ICON_IDLE
+        else:
+            want = None
+        if want is None:
+            return True
+        # Re-assert if the icon changed, OR if we're in a transient state, OR
+        # during the short post-idle window. Otherwise stay quiet (idle leak fix).
+        transient = self.state in ("RECORDING", "TRANSCRIBING")
+        in_idle_window = self.state == "IDLE" and time.monotonic() < self._idle_assert_until
+        if want != self._last_icon or transient or in_idle_window:
+            self.indicator.set_icon_full(want, "Recording" if want == ICON_RECORDING else ("Transcribing" if want == ICON_PROCESSING else ("Waiting for model" if want == ICON_DISABLED else "Idle")))
+            self._last_icon = want
         return True  # keep the timer running
 
 
