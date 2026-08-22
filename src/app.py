@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.9"
+__version__ = "2.0.10"
 
 import os
 import pathlib
@@ -698,11 +698,18 @@ class DictationApp:
 
     def set_idle(self):
         self.state = "IDLE"
+        # libayatana-appindicator only emits the NewIcon DBus signal when the
+        # icon NAME actually changes, so re-asserting the same green icon is a
+        # silent no-op (and the GNOME extension's own equality check can also
+        # dedupe a green->green update against its stale cache). Toggle through
+        # a distinct icon first so the final green set is always a genuine name
+        # change the tray can't collapse away after a fast no-speech stop. Both
+        # calls run in the same main-loop tick, so no grey flicker is visible.
+        self.indicator.set_icon_full(ICON_DISABLED, "Idle")
         self.indicator.set_icon_full(ICON_IDLE, "Idle")
         self._last_icon = ICON_IDLE
-        # Open a short re-assert window so the tray can't stay stuck on the
-        # previous (amber/red) icon after a fast no-speech stop. Bounded, so
-        # the idle memory leak stays fixed.
+        # Keep the short post-idle re-assert window as a belt-and-suspenders
+        # self-heal (bounded, so the idle memory leak stays fixed).
         self._idle_assert_until = time.monotonic() + 2.0
         self.status_item.set_label("Status: Idle")
         try:

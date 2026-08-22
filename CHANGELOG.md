@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.10] - 2026-08-22
+
+### Fixed
+- **Tray icon still stuck amber after a no-speech stop (2.0.9 regression).**
+  The 2.0.9 re-assert window was a no-op: libayatana-appindicator's
+  `set_icon_full()` only emits the `NewIcon` DBus signal when the icon NAME
+  actually changes, so re-asserting the same green icon every 500ms was
+  silently dropped, and the GNOME extension's own equality check could also
+  dedupe a green->green update against its stale cache. `set_idle()` now
+  toggles through the disabled icon before settling on green, so the final
+  green set is always a genuine name change the tray can't collapse away.
+
 ## [2.0.9] - 2026-08-20
 
 ### Fixed
