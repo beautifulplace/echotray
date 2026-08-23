@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.12] - 2026-08-22
+
+### Changed
+- **Dynamic model button in the Setup window.** The button now reflects the
+  selected model's state: "Download" when it isn't cached, "Load" when it's
+  cached but not the currently loaded model, and "Ready" when it's the loaded
+  model. Clicking "Load" loads the cached model without re-downloading.
+
 ## [2.0.11] - 2026-08-22
 
 ### Fixed
