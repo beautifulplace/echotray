@@ -39,16 +39,16 @@ entirely local, offline architecture - is inspired by
 EchoTray is split into two processes to minimize the privileges needed by the GUI:
 
 ```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│  echotray (GUI)          │        │  echotray-helperd (root)   │
-│  ── runs as your user       │        │  ── runs via systemd as root  │
-│  ── NO special groups       │        │  ── Rust, memory-safe         │
-│                             │  UNIX  │  ── owns /dev/uinput          │
-│  · mic recording            │ socket │                              │
-│  · Whisper transcription    │───────▶│  · injects Ctrl+V (paste)     │
-│  · wl-copy (clipboard)      │        │                              │
-│  · tray icon / notifications│        │                              │
-└─────────────────────────────┘        └──────────────────────────────┘
+┌─────────────────────────────┐        ┌─────────────────────────────┐
+│  echotray (GUI)             │        │  echotray-helperd (root)    │
+│  -- runs as your user       │        │  -- runs via systemd (root) │
+│  -- NO special groups       │        │  -- Rust, memory-safe       │
+│                             │  UNIX  │  -- owns /dev/uinput        │
+│  · mic recording            │ socket │                             │
+│  · Whisper transcription    │───────▶│  · injects Ctrl+V (paste)   │
+│  · wl-copy (clipboard)      │        │                             │
+│  · tray icon / notifications│        │                             │
+└─────────────────────────────┘        └─────────────────────────────┘
 ```
 
 The daemon is **paste-only** - it has no hotkey and does not read the keyboard. The
