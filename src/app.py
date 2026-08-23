@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.11"
+__version__ = "2.0.12"
 
 import os
 import pathlib
@@ -380,7 +380,14 @@ class SetupWindow(Gtk.Window):
 
     def _on_download(self, _btn):
         size = self.model_combo.get_active_text() or "small"
-        self.app._start_model_download(size)
+        # If the selected size is already loaded, the button is a no-op ("Ready").
+        if size == self.app.loaded_model_size:
+            return
+        # If the selected size is downloaded but not loaded, load it (no re-download).
+        if size in whisper.downloaded_model_sizes():
+            self.app._start_model_load(size)
+        else:
+            self.app._start_model_download(size)
 
     # ── settings persistence ─────────────────────────────────────────────────
     def _set_combo_from_value(self, combo, value, options, default_index):
@@ -417,10 +424,20 @@ class SetupWindow(Gtk.Window):
             self.progress.set_fraction(frac)
             self.progress.set_text(f"{int(frac * 100)}%")
             self.download_btn.set_sensitive(False)
+            self.download_btn.set_label("Downloading...")
         else:
             self.progress.set_fraction(0)
             self.progress.set_text("")
             self.download_btn.set_sensitive(True)
+            # Dynamic label for the selected size: "Ready" if it's the loaded
+            # model, "Load" if it's downloaded but not loaded, else "Download".
+            size = self.model_combo.get_active_text() or "small"
+            if size == self.app.loaded_model_size:
+                self.download_btn.set_label("Ready")
+            elif size in whisper.downloaded_model_sizes():
+                self.download_btn.set_label("Load")
+            else:
+                self.download_btn.set_label("Download")
         downloaded = whisper.downloaded_model_sizes()
         model_ready = bool(downloaded)
         self.model_light.set_ok(model_ready)
@@ -541,6 +558,7 @@ class DictationApp:
         # download is owned by the app (not the window) so it continues even if
         # the window closes.
         self.model_size = whisper.MODEL_SIZE
+        self.loaded_model_size = None  # size of the model currently in self.model
         self._download_thread = None
         self._download_result = {"ok": False, "error": None}
         self._download_progress = {"active": False, "fraction": 0.0, "bytes": 0, "size": None}
@@ -663,9 +681,39 @@ class DictationApp:
         self._download_thread = threading.Thread(target=_job, daemon=True)
         self._download_thread.start()
 
+    def _start_model_load(self, size):
+        """Load an already-downloaded model in the background (no re-download).
+
+        Used when the user picks a size that is cached but not currently loaded.
+        Mirrors _start_model_download's ownership model: the load is owned by
+        the app and continues even if the setup window closes.
+        """
+        if self._download_thread is not None and self._download_thread.is_alive():
+            return  # a download/load is already in flight
+        self.model_size = size
+        _write_env("MODEL_SIZE", size)
+        whisper.MODEL_SIZE = size
+        self._download_progress = {"active": True, "fraction": 0.0, "bytes": 0, "size": size}
+
+        def _job():
+            try:
+                model = whisper.load_model(size)
+            except Exception as e:  # noqa: BLE001
+                print(f"[ERROR] Model load failed: {e}")
+                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
+                return
+            finally:
+                self._download_progress["active"] = False
+                self._download_progress["fraction"] = 1.0
+            GLib.idle_add(self._activate_model, model)
+
+        self._download_thread = threading.Thread(target=_job, daemon=True)
+        self._download_thread.start()
+
     def _activate_model(self, model):
         """Set the loaded model on the app and flip it to ready (main thread)."""
         self.model = model
+        self.loaded_model_size = self.model_size
         self.set_ready()
         if NOTIFY_ON_READY:
             notify("Ready", "Click the round tray microphone to dictate")
@@ -945,6 +993,9 @@ def main():
     downloaded = whisper.downloaded_model_sizes()
     if downloaded:
         size = whisper.MODEL_SIZE if whisper.MODEL_SIZE in downloaded else downloaded[0]
+        # Record the size we're actually loading so the setup window's button
+        # can report "Ready" for the correct model.
+        app.model_size = size
         print(f"Model '{size}' is cached - loading in the background...")
         def _load():
             try:
