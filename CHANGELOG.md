@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.11] - 2026-08-22
+
+### Fixed
+- **Tray icon stuck amber after a no-speech stop (real fix).** The 2.0.10
+  toggle-through-disabled approach did not work: the grey and green sets both
+  landed inside the GNOME AppIndicator extension's 30ms debounce window, so the
+  transition was still collapsed. `set_idle()` now settles on green on a 150ms
+  delay, so the amber -> green change lands outside the debounce window as a
+  separate, genuine change the extension can't drop.
+
+### Changed
+- Added `CPU_THREADS=4` to `.env.example` (CTranslate2 thread cap).
+- Added diagnostic logging (`[STATE]` / `[ICON]` lines) to state transitions and
+  the icon poll timer.
+
 ## [2.0.10] - 2026-08-22
 
 ### Fixed
