@@ -17,6 +17,20 @@ fi
 echo "=== Installing EchoTray helper daemon (Rust) ==="
 
 # 1. Ensure cargo/rustc is available
+
+is_helper_current() {
+    local src_bin="$CARGO_DIR/target/release/echotray-helperd"
+    local dst_bin="$BIN"
+    # Check installed binary exists and is newer-or-same as the built source.
+    [ -f "$dst_bin" ] || return 1
+    [ -f "$src_bin" ] || return 1
+    [ "$dst_bin" -nt "$src_bin" ] || [ "$dst_bin" -ot "$src_bin" ] || return 1
+    # Check the systemd service is installed and running.
+    [ -f /etc/systemd/system/echotray-helperd.service ] || return 1
+    systemctl is-active --quiet echotray-helperd.service || return 1
+    return 0
+}
+
 echo "  Step 1/4: Ensuring Rust toolchain (rustc, cargo)..."
 if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
     echo "    rustc/cargo not found - installing via apt (this downloads ~100MB,"
@@ -35,17 +49,21 @@ install -m 755 "$CARGO_DIR/target/release/echotray-helperd" "$BIN"
 echo "    Built $BIN"
 
 # 3. Install the systemd service
-echo "  Step 3/4: Installing systemd service..."
-install -m 644 "$SERVICE" /etc/systemd/system/echotray-helperd.service
-systemctl daemon-reload
+if is_helper_current; then
+    echo "  Step 3/4: Helper daemon is already installed and running - skipping."
+else
+    echo "  Step 3/4: Installing systemd service..."
+    install -m 644 "$SERVICE" /etc/systemd/system/echotray-helperd.service
+    systemctl daemon-reload
 
-# 4. Enable + start (or restart if already running)
-echo "  Step 4/4: Enabling and starting service..."
-systemctl enable echotray-helperd.service
-systemctl restart echotray-helperd.service
+    # 4. Enable + start (or restart if already running)
+    echo "  Step 4/4: Enabling and starting service..."
+    systemctl enable echotray-helperd.service
+    systemctl restart echotray-helperd.service
 
-echo ""
-echo "=== Done ==="
-echo "Helper daemon installed (Rust, memory-safe). Verify with:"
-echo "  systemctl status echotray-helperd"
-echo "The GUI connects over /run/echotray.sock as an unprivileged user."
+    echo ""
+    echo "=== Done ==="
+    echo "Helper daemon installed (Rust, memory-safe). Verify with:"
+    echo "  systemctl status echotray-helperd"
+    echo "The GUI connects over /run/echotray.sock as an unprivileged user."
+fi
