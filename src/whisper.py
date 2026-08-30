@@ -202,6 +202,23 @@ def load_model(size=None):
     return model
 
 
+def unload_model(model):
+    """Release CTranslate2's model memory while keeping the runtime context.
+
+    Called before loading a different model size so we don't briefly hold two
+    Whisper models in memory.
+    """
+    if model is None:
+        return
+    try:
+        # faster-whisper wraps the CTranslate2 Whisper object at model.model
+        cmodel = getattr(model, "model", None)
+        if cmodel is not None and hasattr(cmodel, "unload_model"):
+            cmodel.unload_model()
+    except Exception as e:
+        print(f"[WARNING] Could not unload old model: {e}")
+
+
 # ── Audio Recorder ────────────────────────────────────────────────────────────
 
 class AudioRecorder:

@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.12"
+__version__ = "2.0.13"
 
 import os
 import pathlib
@@ -26,6 +26,42 @@ import time
 
 import gi
 from dotenv import load_dotenv
+
+# Try to release freed glibc heap arenas back to the OS after dictation; this is
+# available on glibc/Linux. If ctypes is missing, flushing is a no-op.
+_ = ctypes = None
+try:
+    import ctypes as _ctypes
+    ctypes = _ctypes
+except ImportError:
+    pass
+
+def _flush_memory():
+    """Return freed memory back to the OS and collect Python garbage.
+
+    Python/glibc keeps freed heap arenas in the process, so RSS stays at the
+    high-water mark even after the audio buffer and transcription transient
+    objects are deleted. This forces a GC cycle and asks glibc to release
+    unused pages, which is what makes the process RSS actually drop.
+    """
+    gc.collect()
+    if ctypes is not None:
+        try:
+            ctypes.CDLL(None).malloc_trim(0)
+        except Exception:
+            pass
+
+def _log_rss(label=""):
+    """Print current RSS in kB if /proc/self/status is readable."""
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = line.split()[1]
+                    print(f"[RSS] {label} {rss} kB" if label else f"[RSS] {rss} kB")
+                    break
+    except Exception:
+        pass
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -489,10 +525,18 @@ def paste_text(text):
 # ── Transcription Orchestration ───────────────────────────────────────────────
 
 def transcribe_and_paste(model, audio_data, app):
+    def _reclaim():
+        """Collect Python garbage and release freed pages back to the OS."""
+        _flush_memory()
+        _log_rss("after flush")
+
     # Reject recordings that are too short to contain speech
     if len(audio_data) < whisper.SAMPLE_RATE // 10:
         if NOTIFY_ON_SKIPPED:
             notify("Skipped", "Recording too short")
+        audio_data[:] = 0
+        del audio_data
+        _reclaim()
         GLib.idle_add(app.set_idle)
         return
 
@@ -503,6 +547,9 @@ def transcribe_and_paste(model, audio_data, app):
         print(f"[ERROR] Transcription: {e}")
         body = f"Transcription failed: {e}" if NOTIFY_VERBOSE else "Transcription failed - check terminal for details."
         notify("Error", body, urgency="critical")
+        audio_data[:] = 0
+        del audio_data
+        _reclaim()
         GLib.idle_add(app.set_idle)
         return
 
@@ -511,6 +558,9 @@ def transcribe_and_paste(model, audio_data, app):
     if not text:
         if NOTIFY_ON_SKIPPED:
             notify("Skipped", f"No speech detected ({elapsed:.1f}s)")
+        audio_data[:] = 0
+        del audio_data
+        _reclaim()
         GLib.idle_add(app.set_idle)
         return
 
@@ -535,7 +585,7 @@ def transcribe_and_paste(model, audio_data, app):
     # generators, VAD state) now, rather than letting them accumulate across
     # many dictations. The Whisper model itself (~1.3GB for 'small') stays
     # loaded - that's the fixed baseline - but transient memory is freed here.
-    gc.collect()
+    _reclaim()
     GLib.idle_add(app.set_idle)
 
 
@@ -666,6 +716,9 @@ class DictationApp:
                 self._download_progress["fraction"] = 1.0
                 if self._download_result["ok"]:
                     # Load the freshly downloaded model and enable the app.
+                    # First unload any previous model so we don't hold two
+                    # Whisper models in memory at the same time.
+                    whisper.unload_model(self.model)
                     try:
                         model = whisper.load_model(size)
                     except Exception as e:  # noqa: BLE001
@@ -697,6 +750,8 @@ class DictationApp:
 
         def _job():
             try:
+                # Unload any previous model first so two models aren't resident.
+                whisper.unload_model(self.model)
                 model = whisper.load_model(size)
             except Exception as e:  # noqa: BLE001
                 print(f"[ERROR] Model load failed: {e}")
@@ -715,6 +770,8 @@ class DictationApp:
         self.model = model
         self.loaded_model_size = self.model_size
         self.set_ready()
+        _flush_memory()
+        _log_rss("after model load")
         if NOTIFY_ON_READY:
             notify("Ready", "Click the round tray microphone to dictate")
 

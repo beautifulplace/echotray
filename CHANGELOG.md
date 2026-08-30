@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.0.13] - 2026-08-30
+
+### Fixed
+- **Memory no longer stays stuck at the high-water mark after dictation.** Each
+  dictation now zeros and deletes the audio buffer, runs `gc.collect()`, and
+  then calls `malloc_trim(0)` to return freed glibc heap pages back to the OS.
+  The log now includes `[RSS] after flush ... kB` lines so the effect is
+  visible.
+- **Switching model sizes no longer briefly holds two Whisper models.** Before
+  loading a new model, EchoTray unloads the previous CTranslate2 model, so
+  swapping `small` -> `tiny` -> `small` can't spike RSS by holding both in
+  memory.
+- **RSS is now logged after model loads.** `[RSS] after model load ... kB` is
+  printed whenever a model finishes loading, making it easy to see the
+  steady-state footprint for the chosen size.
+
+### Changed
+- **Setup is now idempotent and faster.** `setup.sh` checks whether each
+  required system package is already installed via `dpkg -s` and only runs
+  `sudo apt install` for missing packages.
+- **Helper daemon install is now idempotent.** `install-helper.sh` skips the
+  build/install/service steps if the installed binary is current and the
+  systemd service is already running.
+
 ## [2.0.12] - 2026-08-22
 
 ### Changed

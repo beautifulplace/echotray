@@ -20,13 +20,40 @@ echo "Privileged input (Ctrl+V paste) is handled by the root-owned"
 echo "echotray-helperd daemon. Your user needs NO special groups."
 echo ""
 
-# Install system packages
-echo "[1/4] Installing system packages..."
-sudo apt install -y build-essential python3-dev python3-venv wl-clipboard libportaudio2 portaudio19-dev gir1.2-ayatanaappindicator3-0.1 libnotify-bin
+# Install system packages only if any are missing. dpkg -s is fast and avoids
+# a heavy apt round-trip when everything is already installed.
+_REQUIRED_PACKAGES=(
+    build-essential
+    python3-dev
+    python3-venv
+    wl-clipboard
+    libportaudio2
+    portaudio19-dev
+    gir1.2-ayatanaappindicator3-0.1
+    libnotify-bin
+)
+
+_missing_packages() {
+    local missing=""
+    for pkg in "${_REQUIRED_PACKAGES[@]}"; do
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            missing="$missing $pkg"
+        fi
+    done
+    echo "$missing"
+}
+
+MISSING=$(_missing_packages)
+if [ -n "$MISSING" ]; then
+    echo "[1/4] Installing missing system packages...$MISSING"
+    sudo apt install -y $MISSING
+else
+    echo "[1/4] All required system packages are already installed - skipping apt."
+fi
 
 # Build + install the privileged helper daemon (requires root)
 echo ""
-echo "[2/4] Installing the privileged helper daemon (echotray-helperd)..."
+echo "[2/4] Ensuring the privileged helper daemon (echotray-helperd)..."
 sudo bash "$SCRIPT_DIR/install-helper.sh"
 
 # Copy the app source into the install dir (idempotent)
