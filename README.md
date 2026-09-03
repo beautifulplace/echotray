@@ -94,7 +94,7 @@ is not tied to any one desktop, but behavior varies:
 ```bash
 git clone https://github.com/beautifulplace/echotray.git
 cd echotray
-./setup.sh
+./install.sh
 ```
 
 The setup script:
@@ -142,7 +142,7 @@ nano ~/.local/share/echotray/.env
 echotray
 ```
 
-(`setup.sh` installs an `echotray` command - a wrapper at
+(`install.sh` installs an `echotray` command - a wrapper at
 `~/.local/share/echotray/echotray` symlinked into `~/.local/bin`. If `~/.local/bin`
 isn't on your PATH, run it as
 `~/.local/share/echotray/echotray` instead.)
@@ -183,7 +183,7 @@ cliphist on wlroots-based compositors).
 
 | Error | Fix |
 |-------|-----|
-| `echotray-helperd is not running` | `sudo systemctl start echotray-helperd`, or re-run `./setup.sh` |
+| `echotray-helperd is not running` | `sudo systemctl start echotray-helperd`, or re-run `./install.sh` |
 | No audio input device found | Check mic is connected, PipeWire is running |
 | Text not appearing at cursor | Text is on your clipboard - paste manually with Ctrl+V |
 | No tray icon | `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com` |
