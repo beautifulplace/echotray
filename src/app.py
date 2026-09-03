@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.13"
+__version__ = "2.0.14"
 
 import os
 import pathlib

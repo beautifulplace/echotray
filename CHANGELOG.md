@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.14] - 2026-09-03
+
+### Changed
+- **Renamed install scripts.** `setup.sh` → `install.sh` (the single entry point,
+  matching the `install.sh` convention used across the project's other repos) and
+  `install-helper.sh` → `helper_install.sh` (so the privileged helper installer
+  is clearly not the app installer).
+
 ## [2.0.13] - 2026-08-30
 
 ### Fixed

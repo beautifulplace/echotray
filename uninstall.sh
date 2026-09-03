@@ -3,7 +3,7 @@
 #
 # Removes EVERYTHING this version of EchoTray installs or creates, with no
 # prompts. Clean slate model: no legacy handling, no memory of old versions.
-# Reinstall anytime by running ./setup.sh.
+# Reinstall anytime by running ./install.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
@@ -81,5 +81,5 @@ echo "=== Uninstall complete ==="
 echo "  Removed: desktop launcher, install dir ($INSTALL_DIR),"
 echo "           helper daemon service + binary, socket, lock."
 echo "  Project folder is intact: $SCRIPT_DIR"
-echo "  Run ./setup.sh to reinstall."
+echo "  Run ./install.sh to reinstall."
 echo ""

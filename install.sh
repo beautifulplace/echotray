@@ -54,7 +54,7 @@ fi
 # Build + install the privileged helper daemon (requires root)
 echo ""
 echo "[2/4] Ensuring the privileged helper daemon (echotray-helperd)..."
-sudo bash "$SCRIPT_DIR/install-helper.sh"
+sudo bash "$SCRIPT_DIR/helper_install.sh"
 
 # Copy the app source into the install dir (idempotent)
 echo ""
