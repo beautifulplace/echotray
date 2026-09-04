@@ -3,6 +3,8 @@
 Local speech-to-text dictation for Linux (Wayland and X11). Click the tray microphone to
 start recording, click again to stop - the transcript is pasted at your cursor.
 
+[![version](https://img.shields.io/badge/version-2.2.0-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
+
 **Fully self-contained and offline.** The Whisper model is downloaded on first run
 and cached locally. No external LLM, no cloud service, no GPU required - it runs on
 CPU via int8 quantization. Works on both **AMD64 and ARM64** (CTranslate2 ships
@@ -20,6 +22,20 @@ global hotkey were removed, and privileged input was moved into a separate
 root-owned daemon. The design - including the click-to-talk interaction and the
 entirely local, offline architecture - is inspired by
 [woheller69/whisperIMEplus](https://github.com/woheller69/whisperIMEplus).
+
+## Contents
+
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Desktop Compatibility](#desktop-compatibility)
+- [Setup](#setup)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Tray Icon Menu](#tray-icon-menu)
+- [Clipboard behavior](#clipboard-behavior)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ## How It Works
 
@@ -65,7 +81,7 @@ normal user's privileges.
 
 ## Requirements
 
-- Linux with Wayland (tested on GNOME/Mutter with PipeWire)
+- Linux with Wayland or X11 (tested on GNOME, KDE Plasma, and XFCE)
 - Python 3.10+
 - A microphone
 - `systemd` (for the helper daemon service)
@@ -73,19 +89,14 @@ normal user's privileges.
 
 ## Desktop Compatibility
 
-EchoTray needs a **Wayland** compositor and **AppIndicator** tray support. It
-is not tied to any one desktop, but behavior varies:
+EchoTray needs **AppIndicator** tray support. It works on both **Wayland and
+X11**, and is not tied to any one desktop:
 
-| Desktop | Tray icon | Left-click | Notes |
-|---------|-----------|------------|-------|
-| **GNOME** | Needs the AppIndicator extension enabled | Opens the menu (does not toggle) | Use **Start/Stop recording** from the tray menu. Extension is installed by default on Ubuntu: `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com` |
-| **KDE Plasma** | Works out of the box | Toggles recording directly | Smoothest experience - no extension needed |
-| **XFCE / Cinnamon / Budgie / other Wayland** | Works if AppIndicator support is present | Varies | Behavior depends on the desktop's AppIndicator implementation |
-
-> **Note:** EchoTray is currently tested on **GNOME/Mutter only**. The KDE and
-> other-desktop behavior above is based on how AppIndicator works there, not on
-> live testing. If you run it on another desktop, please report what works so we
-> can update this table.
+| Desktop | Tray icon | Left-click | Right-click | Notes |
+|---------|-----------|------------|-------------|-------|
+| **GNOME** | Needs the AppIndicator extension enabled | Opens the menu | Opens the menu | Use **Start/Stop recording** from the tray menu. Extension is installed by default on Ubuntu: `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com` |
+| **KDE Plasma** | Works out of the box | Opens the menu | Opens the menu | Use **Start/Stop recording** from the tray menu |
+| **XFCE** | Works out of the box | Opens the menu | Opens the menu | Use **Start/Stop recording** from the tray menu |
 
 ## Setup
 
