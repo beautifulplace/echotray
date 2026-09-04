@@ -77,25 +77,34 @@ else
     echo "  No downloaded model yet - it will be fetched on first launch."
 fi
 
-# Create (or recreate) virtual environment inside the install dir
+# Install uv (fast Rust-based package installer). This is what makes the
+# dependency install fast — plain pip resolves and downloads sequentially,
+# while uv resolves in parallel and reuses a warm cache.
+echo ""
+echo "  Installing uv (fast package installer)..."
+if ! command -v uv >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+# Ensure uv is on PATH for this script (install.sh puts it in ~/.local/bin or ~/.cargo/bin)
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+uv --version
+
+# Create (or recreate) virtual environment inside the install dir.
+# --system-site-packages keeps the system's GTK bindings (python3-gi,
+# python3-cairo) so we don't have to build PyGObject/pycairo from source.
 echo ""
 echo "  Setting up Python virtual environment..."
 if [ -d "$VENV_DIR" ]; then
     echo "    Removing existing venv for clean reinstall..."
     rm -rf "$VENV_DIR"
 fi
-/usr/bin/python3 -m venv --system-site-packages "$VENV_DIR"
+uv venv --system-site-packages --python /usr/bin/python3 "$VENV_DIR"
 echo "  Created $VENV_DIR"
 
-# Install Python dependencies
+# Install Python dependencies with uv (fast, parallel resolution).
 echo ""
 echo "  Installing Python dependencies..."
-# --ignore-installed: the venv uses --system-site-packages, so pip sees the
-# system's packages (protobuf, click, etc.) and tries to upgrade them, but they
-# live outside the venv and can't be uninstalled - producing noisy "Attempting
-# uninstall / Can't uninstall" warnings. --ignore-installed skips that entirely.
-"$VENV_DIR/bin/pip" install --upgrade --ignore-installed pip
-"$VENV_DIR/bin/pip" install --ignore-installed -r "$APP_DIR/requirements.txt"
+uv pip install --python "$VENV_DIR/bin/python" -r "$APP_DIR/requirements.txt"
 
 # Set up .env config file (lives in the install dir, not the git clone)
 echo ""

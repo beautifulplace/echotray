@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.0.14"
+__version__ = "2.1.0"
 
 import os
 import pathlib
@@ -65,7 +65,7 @@ def _log_rss(label=""):
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk, Gdk  # noqa: E402
 from gi.repository import AyatanaAppIndicator3 as appindicator  # noqa: E402
 
 import helper_client
@@ -172,6 +172,58 @@ def show_error_dialog(message):
     dialog.destroy()
 
 
+# ── Control styling ───────────────────────────────────────────────────────────
+
+# A small set of control-level rules (rounded, padded buttons and entries) that
+# apply on top of whatever system theme is active. We deliberately do NOT set
+# window/background/foreground colors, so the app follows the user's light or
+# dark system theme. Borders on Gtk.Box are unreliable in GTK3 (themes override
+# them), so grouped controls use the cairo-drawn _RoundedFrame instead of CSS
+# borders.
+_THEME_CSS = b"""
+button {
+    background-image: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+}
+entry {
+    border-radius: 4px;
+    padding: 6px;
+}
+.heading {
+    font-weight: bold;
+}
+.version-pill {
+    background-color: #2ec27e;
+    color: #ffffff;
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+.monospace {
+    font-family: monospace;
+}
+"""
+
+
+def _apply_theme():
+    """Load the control-styling CSS provider, guarded for headless launch.
+
+    GTK3 has no add_provider_for_display (that is GTK4). The screen-based API
+    is the only option, but Gdk.Screen.get_default() returns None on Wayland.
+    Get the screen from the display instead — Gdk.Display.get_default_screen()
+    returns a valid screen on both X11 and Wayland. Guard against a missing
+    display (headless) so the app still launches without a screen.
+    """
+    provider = Gtk.CssProvider()
+    provider.load_from_data(_THEME_CSS)
+    display = Gdk.Display.get_default()
+    if display is not None:
+        screen = display.get_default_screen()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
 # ── Single-instance guard ─────────────────────────────────────────────────────
 
 _LOCK_PATH = "/tmp/echotray.lock"
@@ -262,6 +314,375 @@ class _StatusLight(Gtk.DrawingArea):
         cr.fill()
 
 
+def _monospace_font():
+    """Return a monospace Pango font description for the debug text view."""
+    from gi.repository import Pango
+    return Pango.FontDescription("monospace 10")
+
+
+def _debug_info():
+    """Return a copyable block of version/config details plus the app log.
+
+    Mirrors the Camera app's "Debugging Information" page: app version, library
+    versions, current configuration, and the tail of the app log, in a
+    monospace block the user can select, copy, or save.
+    """
+    def _ver(dist):
+        # Read the installed version from package metadata, NOT by importing
+        # the module. Importing faster-whisper pulls in ctranslate2/onnxruntime,
+        # which would make opening the About window slow even though the debug
+        # page is never shown.
+        try:
+            from importlib.metadata import version
+            return version(dist)
+        except Exception:
+            return "unknown"
+
+    lines = [
+        "EchoTray " + __version__,
+        "",
+        "Libraries:",
+        "  faster-whisper  " + _ver("faster-whisper"),
+        "  ctranslate2     " + _ver("ctranslate2"),
+        "  GTK             " + ".".join(str(x) for x in (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version())),
+        "",
+        "Configuration:",
+        "  MODEL_SIZE       " + whisper.MODEL_SIZE,
+        "  COMPUTE_TYPE     " + whisper.COMPUTE_TYPE,
+        "  LANGUAGE         " + (whisper.LANGUAGE or "(auto-detect)"),
+        "  CPU_THREADS      " + str(whisper.CPU_THREADS),
+        "  LOG_PATH         " + str(_LOG_PATH),
+    ]
+
+    # Append the tail of the app log (last ~200 lines) if it exists.
+    try:
+        if _LOG_PATH.exists():
+            log_text = _LOG_PATH.read_text(errors="replace")
+            tail = log_text.strip().splitlines()[-200:]
+            lines.append("")
+            lines.append("Log (last %d lines):" % len(tail))
+            lines.extend(tail)
+    except OSError:
+        pass
+
+    return "\n".join(lines)
+
+
+class AboutWindow(Gtk.Window):
+    """Non-modal About window in the GNOME/Adwaita style.
+
+    Large centered app icon, bold title, a green version pill, and the app
+    description as a plain (non-button) row. Below it: Website (a button that
+    opens the repo, tooltip shows the URL) and Troubleshooting (slides over to
+    debugging info).
+    """
+
+    REPO_URL = "https://github.com/beautifulplace/echotray"
+
+    def __init__(self, app):
+        super().__init__(title="About EchoTray")
+        self.app = app
+        self.set_default_size(360, -1)
+        self.set_border_width(0)
+        # Non-resizable: removes the maximize button (the DIALOG type hint that
+        # used to do this also made Mutter keep the window above normal windows,
+        # so we avoid it and just disable resizing instead).
+        self.set_resizable(False)
+
+        # Header bar with a close button and a back button (shown on the
+        # Troubleshooting page).
+        hb = Gtk.HeaderBar()
+        hb.set_show_close_button(True)
+        hb.set_title("About EchoTray")
+        self._back_btn = Gtk.Button()
+        self._back_btn.set_image(
+            Gtk.Image.new_from_icon_name("go-previous-symbolic", Gtk.IconSize.BUTTON))
+        self._back_btn.set_tooltip_text("Back")
+        self._back_btn.connect("clicked", self._on_back)
+        # show_all() would reveal this button on the main page; keep it hidden
+        # until a subpage is pushed (set_visible(True) still works explicitly).
+        self._back_btn.set_no_show_all(True)
+        hb.pack_start(self._back_btn)
+        self.set_titlebar(hb)
+
+        # Stack with a slide transition between pages. Navigation is a simple
+        # push/pop stack so the back button returns one level at a time
+        # (main -> troubleshooting -> debugging info).
+        self._stack = Gtk.Stack()
+        self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        self._stack.set_transition_duration(200)
+        self.add(self._stack)
+
+        self._stack.add_named(self._build_main_page(), "main")
+        self._stack.add_named(self._build_troubleshooting_page(), "troubleshooting")
+        self._stack.add_named(self._build_debug_page(), "debug")
+
+        self._nav_history = []  # stack of page names, for back navigation
+        self._back_btn.set_visible(False)
+        self.connect("delete-event", lambda *_: self.hide() or True)
+
+    # ── page navigation ────────────────────────────────────────────────────────
+    def _push_page(self, name):
+        self._nav_history.append(self._stack.get_visible_child_name())
+        self._stack.set_visible_child_name(name)
+        self._back_btn.set_visible(True)
+
+    def _on_back(self, _btn):
+        if self._nav_history:
+            prev = self._nav_history.pop()
+            self._stack.set_visible_child_name(prev)
+        else:
+            self._stack.set_visible_child_name("main")
+        self._back_btn.set_visible(bool(self._nav_history))
+
+    def _show_troubleshooting(self, _row):
+        self._push_page("troubleshooting")
+
+    def _show_debug(self, _row):
+        self._push_page("debug")
+
+    # ── main page ──────────────────────────────────────────────────────────────
+    def _build_main_page(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        # Header: large icon + bold title + version pill.
+        header = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        header.set_halign(Gtk.Align.CENTER)
+        header.set_margin_top(24)
+        header.set_margin_bottom(16)
+        header.set_margin_start(24)
+        header.set_margin_end(24)
+
+        try:
+            from gi.repository import GdkPixbuf
+            pb = GdkPixbuf.Pixbuf.new_from_file(ICON_IDLE)
+            pb = pb.scale_simple(96, 96, GdkPixbuf.InterpType.BILINEAR)
+            img = Gtk.Image.new_from_pixbuf(pb)
+        except Exception:
+            img = Gtk.Image.new_from_icon_name("audio-input-microphone", Gtk.IconSize.DIALOG)
+        img.set_halign(Gtk.Align.CENTER)
+        header.pack_start(img, False, False, 0)
+
+        title = Gtk.Label(label="EchoTray", xalign=0.5)
+        title.set_halign(Gtk.Align.CENTER)
+        title.get_style_context().add_class("title")
+        header.pack_start(title, False, False, 0)
+
+        pill = Gtk.Label(label=__version__, xalign=0.5)
+        pill.set_halign(Gtk.Align.CENTER)
+        pill.get_style_context().add_class("version-pill")
+        header.pack_start(pill, False, False, 0)
+
+        vbox.pack_start(header, False, False, 0)
+
+        # The app description as a plain (non-button) row, no icon (the icon is
+        # already shown at the top).
+        listbox = Gtk.ListBox()
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        listbox.set_margin_start(12)
+        listbox.set_margin_end(12)
+
+        listbox.add(self._plain_row(
+            "Speech-to-Text Dictation",
+            "Click the tray microphone to start recording, click again to stop - the transcript is pasted at your cursor.",
+        ))
+
+        vbox.pack_start(listbox, False, False, 0)
+
+        # Standard About rows. Each row is a full-width clickable row (hover
+        # highlight, single-click activation, no persistent selection).
+        rows = Gtk.ListBox()
+        rows.set_selection_mode(Gtk.SelectionMode.NONE)
+        rows.set_activate_on_single_click(True)
+        rows.connect("row-activated", self._on_row_activated)
+        rows.set_margin_start(12)
+        rows.set_margin_end(12)
+        rows.set_margin_top(12)
+        rows.set_margin_bottom(12)
+
+        # Website — opens the repo; tooltip shows the URL.
+        rows.add(self._button_row("Website", "website", chevron=True, tooltip=self.REPO_URL))
+
+        # Troubleshooting — slides over to a "how to use debugging info" page.
+        rows.add(self._button_row("Troubleshooting", "troubleshooting", chevron=True))
+
+        vbox.pack_start(rows, False, False, 0)
+
+        return vbox
+
+    # ── Troubleshooting page ───────────────────────────────────────────────────
+    def _build_troubleshooting_page(self):
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+
+        title = Gtk.Label(label="Troubleshooting", xalign=0.0)
+        title.get_style_context().add_class("title")
+        box.pack_start(title, False, False, 0)
+
+        body = Gtk.Label(
+            label=("If EchoTray is not working as expected, the debugging "
+                   "information below can help diagnose the problem. It lists "
+                   "the app version, the library versions, and the current "
+                   "configuration.\n\n"
+                   "You can copy it and include it when reporting an issue."),
+            xalign=0.0, wrap=True)
+        body.set_line_wrap(True)
+        body.set_halign(Gtk.Align.FILL)
+        box.pack_start(body, False, False, 0)
+
+        btn = Gtk.Button(label="View debugging information")
+        btn.set_halign(Gtk.Align.START)
+        btn.connect("clicked", self._show_debug)
+        box.pack_start(btn, False, False, 0)
+
+        scroller.add(box)
+        return scroller
+
+    # ── Debugging Information page ─────────────────────────────────────────────
+    def _build_debug_page(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox.set_margin_top(16)
+        vbox.set_margin_bottom(16)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+
+        title = Gtk.Label(label="Debugging Information", xalign=0.0)
+        title.get_style_context().add_class("title")
+        vbox.pack_start(title, False, False, 0)
+
+        # The log content in a scrollable, read-only monospace text view.
+        # A TextView (unlike a selectable Gtk.Label) shows plain text with no
+        # blue selection highlight by default; the Copy button copies the full
+        # text regardless of selection.
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+
+        self._debug_text = _debug_info()
+        view = Gtk.TextView()
+        view.set_editable(False)
+        view.set_cursor_visible(False)
+        view.set_wrap_mode(Gtk.WrapMode.NONE)
+        view.get_buffer().set_text(self._debug_text)
+        view.override_font(_monospace_font())
+        scroller.add(view)
+        vbox.pack_start(scroller, True, True, 0)
+
+        # Copy and Save As buttons.
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_row.set_halign(Gtk.Align.END)
+
+        copy_btn = Gtk.Button(label="Copy")
+        copy_btn.connect("clicked", self._copy_debug)
+        btn_row.pack_start(copy_btn, False, False, 0)
+
+        save_btn = Gtk.Button(label="Save As…")
+        save_btn.connect("clicked", self._save_debug)
+        btn_row.pack_start(save_btn, False, False, 0)
+
+        vbox.pack_start(btn_row, False, False, 0)
+
+        return vbox
+
+    def _copy_debug(self, _btn):
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(self._debug_text, -1)
+
+    def _save_debug(self, _btn):
+        dialog = Gtk.FileChooserDialog(
+            title="Save Debugging Information",
+            parent=self,
+            action=Gtk.FileChooserAction.SAVE,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT,
+        )
+        dialog.set_do_overwrite_confirmation(True)
+        dialog.set_current_name("echotray-debug.txt")
+        if dialog.run() == Gtk.ResponseType.ACCEPT:
+            path = dialog.get_filename()
+            try:
+                with open(path, "w") as f:
+                    f.write(self._debug_text)
+            except OSError as e:
+                print(f"[ABOUT] Failed to save debug info: {e}")
+        dialog.destroy()
+
+    # ── row builders ──────────────────────────────────────────────────────────
+    def _row_box(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        return box
+
+    def _plain_row(self, heading, blurb):
+        """A non-interactive row: heading/blurb, no icon, no chevron, no hover."""
+        row = Gtk.ListBoxRow()
+        row.set_activatable(False)  # no hover/selection highlight
+        row.set_selectable(False)
+        box = self._row_box()
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        head = Gtk.Label(label=heading, xalign=0.5)
+        head.set_halign(Gtk.Align.CENTER)
+        head.get_style_context().add_class("heading")
+        text.pack_start(head, False, False, 0)
+        body = Gtk.Label(label=blurb, xalign=0.5, wrap=True)
+        body.set_line_wrap(True)
+        body.set_max_width_chars(40)
+        body.set_halign(Gtk.Align.CENTER)
+        body.get_style_context().add_class("dim-label")
+        text.pack_start(body, False, False, 0)
+        box.pack_start(text, True, True, 0)
+
+        row.add(box)
+        return row
+
+    def _button_row(self, label, action, chevron=False, tooltip=None):
+        """A full-width clickable row (the whole row is the button).
+
+        The row itself is activatable (hover highlight + single-click), and the
+        action is dispatched via the ListBox 'row-activated' signal, keyed by
+        the `action` string.
+        """
+        row = Gtk.ListBoxRow()
+        row.set_activatable(True)
+        row._action = action  # noqa: SLF001
+        box = self._row_box()
+        lbl = Gtk.Label(label=label, xalign=0.0)
+        box.pack_start(lbl, True, True, 0)
+        if chevron:
+            chev = Gtk.Label(label="›", xalign=0.5)
+            chev.get_style_context().add_class("dim-label")
+            box.pack_start(chev, False, False, 0)
+        if tooltip:
+            row.set_tooltip_text(tooltip)
+        row.add(box)
+        return row
+
+    def _on_row_activated(self, _listbox, row):
+        action = getattr(row, "_action", None)
+        if action == "website":
+            self._open_website()
+        elif action == "troubleshooting":
+            self._show_troubleshooting(None)
+
+    def _open_website(self, *_args):
+        try:
+            Gtk.show_uri_on_window(self, self.REPO_URL, Gdk.CURRENT_TIME)
+        except Exception as e:  # noqa: BLE001
+            print(f"[ABOUT] Failed to open website: {e}")
+
+
 class SetupWindow(Gtk.Window):
     """Non-modal setup window with a Whisper Model section plus simple settings.
 
@@ -282,9 +703,21 @@ class SetupWindow(Gtk.Window):
         # length of the longest sentence. Height auto-sizes to fit content.
         self.set_default_size(420, -1)
         self.set_size_request(360, -1)
-        self.set_border_width(12)
+        self.set_border_width(0)
+        # Non-resizable: removes the maximize button and fixes the window size
+        # (minimize + close only, matching the About window).
+        self.set_resizable(False)
+
+        # Header bar with a close button (Adwaita-style).
+        hb = Gtk.HeaderBar()
+        hb.set_show_close_button(True)
+        hb.set_title("EchoTray Setup")
+        self.set_titlebar(hb)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+        vbox.set_margin_bottom(12)
         self.add(vbox)
 
         self.model_light = _StatusLight()
@@ -410,6 +843,7 @@ class SetupWindow(Gtk.Window):
         if light is not None:
             box.pack_start(light, False, False, 0)
         lbl = Gtk.Label(label=title, xalign=0.0)
+        lbl.get_style_context().add_class("heading")
         lbl.set_hexpand(True)
         box.pack_start(lbl, False, False, 0)
         return box
@@ -836,55 +1270,22 @@ class DictationApp:
         self.status_item.set_label("Status: Transcribing...")
 
     def _on_about(self, _widget):
-        # Cache the dialog so repeated clicks reuse it instead of building a
+        # Cache the window so repeated clicks reuse it instead of building a
         # new one each time (and leaking the old one).
         if self._about_dialog is not None:
             self._about_dialog.present()
             return
-        dialog = Gtk.AboutDialog()
-        self._about_dialog = dialog
-        dialog.set_program_name("EchoTray")
-        dialog.set_version(__version__)
-        # Use the same icon as the tray (icon-idle.svg) so the About dialog and
-        # the tray/desktop launcher match. Scale it down - the source SVG is
-        # 64px and would render large in the dialog.
-        _LOGO = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "icon-idle.svg")
-        if os.path.isfile(_LOGO):
-            try:
-                from gi.repository import GdkPixbuf
-                _pb = GdkPixbuf.Pixbuf.new_from_file(_LOGO)
-                _pb = _pb.scale_simple(128, 128, GdkPixbuf.InterpType.BILINEAR)
-                dialog.set_logo_icon_name("")
-                dialog.set_logo(_pb)
-            except Exception:
-                pass
-        dialog.set_comments(
-            "Speech-to-text dictation, fully offline and self-contained.\n"
-            "Click the round tray microphone to start/stop recording; the\n"
-            "transcript is pasted at your cursor.\n\n"
-            "Transcription: faster-whisper + CTranslate2 (CPU, no GPU required)\n"
-            "Model is downloaded on first run and cached locally.\n\n"
-            "Paste (Ctrl+V) handled by the root-owned echotray-helperd,\n"
-            "so EchoTray runs unprivileged with no special groups."
-        )
-        # Show the dialog NON-modally (show + present, not run()). dialog.run()
-        # blocks the main loop, which would freeze the tray icon - so recording
-        # couldn't be stopped and the app couldn't be quit while About was open.
-        dialog.set_modal(False)
-        dialog.connect("response", self._on_about_response)
-        dialog.show()
-        dialog.present()
-        # The About dialog's comments text view grabs keyboard focus and shows a
-        # blinking text cursor even though nothing is editable. Clear focus when
-        # it appears so no cursor is shown.
-        dialog.connect("show", lambda d: d.set_focus(None))
+        win = AboutWindow(self)
+        self._about_dialog = win
+        win.connect("destroy", self._on_about_response)
+        win.show_all()
+        win.present()
 
-    def _on_about_response(self, dialog, _response):
+    def _on_about_response(self, dialog, _response=None):
         # Clear the cached reference so the next About click builds a fresh
-        # dialog (a destroyed widget can't be re-presented).
+        # window (a destroyed widget can't be re-presented).
         if self._about_dialog is dialog:
             self._about_dialog = None
-        dialog.destroy()
 
     def _on_quit(self, _widget):
         # Stop any active recorder before quitting so the audio device is
@@ -1036,6 +1437,9 @@ def main():
     print("EchoTray")
     print("==========")
     print()
+
+    # Apply the control styling before any window is created.
+    _apply_theme()
 
     # Build the tray immediately (grey, disabled). The app never exits on a
     # missing model or missing environment checks - the tray is always up.
