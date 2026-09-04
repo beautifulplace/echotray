@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.4.0] - 2026-09-04
+## [2.3.1] - 2026-09-04
 
 ### Changed
 - **Setup window boxes match the About window.** The section boxes now use
