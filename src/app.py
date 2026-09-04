@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 import os
 import pathlib
@@ -265,6 +265,11 @@ class _RoundedFrame(Gtk.Bin):
 
     def _rounded_path(self, cr, x0, y0, w, h):
         r = self._radius
+        if r <= 0:
+            # Square corners: a plain rectangle (matches the About window's
+            # ListBox rows, which have no rounded edges).
+            cr.rectangle(x0, y0, w, h)
+            return
         x1, y1 = x0 + w, y0 + h
         cr.arc(x1 - r, y0 + r, r, -3.14159 / 2, 0)
         cr.arc(x1 - r, y1 - r, r, 0, 3.14159 / 2)
@@ -826,9 +831,10 @@ class SetupWindow(Gtk.Window):
     def _section(self, title, light=None):
         """Return a (outer, body) where the heading sits OUTSIDE the box.
 
-        Matches the Easy Effects layout: a left-aligned heading above a rounded
-        box that holds the settings. `light` is an optional status light shown
-        next to the heading.
+        A left-aligned heading above a box that holds the settings. The box is a
+        Gtk.ListBox (theme panel background, no border), matching the About
+        window's boxes exactly. `light` is an optional status light shown next
+        to the heading.
         """
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
@@ -841,15 +847,21 @@ class SetupWindow(Gtk.Window):
         header.pack_start(lbl, False, False, 0)
         outer.pack_start(header, False, False, 0)
 
-        # The rounded box holding the settings.
-        frame = _RoundedFrame(border_width=2, radius=12)
+        # The box: a ListBox gives the theme's panel background (dark in a dark
+        # theme) with no border, exactly like the About window's boxes.
+        listbox = Gtk.ListBox()
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         body.set_margin_start(12)
         body.set_margin_end(12)
         body.set_margin_top(12)
         body.set_margin_bottom(12)
-        frame.add(body)
-        outer.pack_start(frame, False, False, 0)
+        row = Gtk.ListBoxRow()
+        row.set_activatable(False)
+        row.set_selectable(False)
+        row.add(body)
+        listbox.add(row)
+        outer.pack_start(listbox, False, False, 0)
 
         return outer, body
 
@@ -924,6 +936,11 @@ class SetupWindow(Gtk.Window):
                 self.app.model = None
                 self.app.loaded_model_size = None
                 self.app.set_disabled()
+                # Return the freed model memory to the OS. Without this, glibc
+                # keeps the freed pages in the process heap and RSS stays at
+                # the high-water mark, so the model appears to stay in memory.
+                _flush_memory()
+                _log_rss("after model unload")
             self._poll()
 
     def _on_delete_model(self, _btn):
@@ -967,6 +984,8 @@ class SetupWindow(Gtk.Window):
             self.app.model = None
             self.app.loaded_model_size = None
             self.app.set_disabled()
+            _flush_memory()
+            _log_rss("after model unload")
         whisper.delete_model(size)
         notify("EchoTray", f"Deleted the '{size}' model.", "audio-input-microphone")
         self._poll()

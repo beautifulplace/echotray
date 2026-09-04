@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.0] - 2026-09-04
+
+### Changed
+- **Setup window boxes match the About window.** The section boxes now use
+  theme panel backgrounds (Gtk.ListBox) with no border, instead of the
+  cairo-drawn rounded frame with a visible edge.
+
+### Fixed
+- **Model unload now returns memory to the OS.** Unloading a model freed
+  CTranslate2's buffers but never called `_flush_memory()`, so glibc kept the
+  freed pages in the process heap and RSS stayed at the high-water mark. Both
+  unload paths (the load/unload toggle and deleting the loaded model) now flush
+  memory so the freed RAM is actually returned to the OS.
+
 ## [2.3.0] - 2026-09-04
 
 ### Added
