@@ -110,7 +110,7 @@ _LOG_PATH = pathlib.Path(os.getenv("WHISPER_LOG", "/tmp/echotray.log"))
 
 # ── Configuration (from .env) ─────────────────────────────────────────────────
 
-PASTE_DELAY_MS = int(os.getenv("PASTE_DELAY_MS", "100"))
+PASTE_DELAY_MS = whisper._env_int("PASTE_DELAY_MS", 100)
 
 # Custom colored tray icons (SVG in assets/) - far more visible than the grey
 # GNOME symbolic icons, and color-coded by state:

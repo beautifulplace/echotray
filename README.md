@@ -35,6 +35,7 @@ entirely local, offline architecture - is inspired by
 - [Tray Icon Menu](#tray-icon-menu)
 - [Clipboard behavior](#clipboard-behavior)
 - [Troubleshooting](#troubleshooting)
+- [Testing](#testing)
 - [License](#license)
 
 ## How It Works
@@ -187,6 +188,24 @@ injecting Ctrl+V. This **overwrites whatever was previously on your clipboard**.
 If you want to keep a history of everything you copy, install a clipboard
 manager for your desktop (e.g. a GNOME clipboard-indicator extension, or
 cliphist on wlroots-based compositors).
+
+## Testing
+
+The project ships an **offline, dependency-free unit test suite** for the pure
+model-cache / download / transcription logic in `src/whisper.py`. It needs no
+audio device, no GPU, and no network — the heavy ML deps (`faster-whisper`,
+`sounddevice`, `numpy`) are imported lazily, so nothing extra is pulled in just
+to import the module.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"   # pytest + ruff
+.venv/bin/python -m pytest          # all tests pass offline
+```
+
+Configuration is exercised directly, including the guard against a malformed
+`.env` value crashing the app at import (it falls back to the default with a
+warning instead).
 
 ## Troubleshooting
 
