@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.1.1"
+__version__ = "2.2.0"
 
 import os
 import pathlib
@@ -942,14 +942,31 @@ class SetupWindow(Gtk.Window):
 
 # ── Text Pasting ──────────────────────────────────────────────────────────────
 
+def _clipboard_tool():
+    """Return the (tool, args) to copy text to the clipboard for this session.
+
+    Wayland uses wl-copy; X11 uses xclip (or xsel). Pick based on the display
+    environment so the same build works on both.
+    """
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return ["wl-copy", "--"]
+    if os.environ.get("DISPLAY"):
+        # xclip is preferred; xsel is a fallback. Both take text on stdin.
+        return ["xclip", "-selection", "clipboard"]
+    # No display server detected - default to wl-copy and let the error path
+    # report it clearly.
+    return ["wl-copy", "--"]
+
+
 def paste_text(text):
-    """Copy text to clipboard via wl-copy, then ask the helper to inject Ctrl+V."""
+    """Copy text to the clipboard, then ask the helper to inject Ctrl+V."""
+    tool = _clipboard_tool()
     try:
-        # Step 1: Copy to Wayland clipboard
-        subprocess.run(["wl-copy", "--", text], check=True, timeout=5)
+        # Step 1: Copy to the clipboard (wl-copy on Wayland, xclip on X11).
+        subprocess.run(tool, input=text.encode("utf-8"), check=True, timeout=5)
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        print(f"[ERROR] wl-copy: {e}")
-        body = f"wl-copy failed: {e}" if NOTIFY_VERBOSE else "Clipboard copy failed - check terminal for details."
+        print(f"[ERROR] {tool[0]}: {e}")
+        body = f"{tool[0]} failed: {e}" if NOTIFY_VERBOSE else "Clipboard copy failed - check terminal for details."
         notify("Error", body, urgency="critical")
         return
 

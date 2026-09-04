@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.0] - 2026-09-03
+
+### Added
+- **X11 support.** The dictation paste path now picks the clipboard tool at
+  runtime: `wl-copy` on Wayland, `xclip` on X11 (based on `WAYLAND_DISPLAY` vs
+  `DISPLAY`). The uinput paste daemon is display-server agnostic, so this is the
+  only change needed for X11. `install.sh` now also installs `xclip`.
+
 ## [2.1.1] - 2026-09-03
 
 ### Fixed
