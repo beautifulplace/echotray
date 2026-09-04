@@ -3,7 +3,7 @@
 Local speech-to-text dictation for Linux (Wayland and X11). Click the tray microphone to
 start recording, click again to stop - the transcript is pasted at your cursor.
 
-[![version](https://img.shields.io/badge/version-2.4.0-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
+[![version](https://img.shields.io/badge/version-2.3.1-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
 
 **Fully self-contained and offline.** The Whisper model is downloaded on first run
 and cached locally. No external LLM, no cloud service, no GPU required - it runs on
