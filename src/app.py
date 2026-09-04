@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 import os
 import pathlib
@@ -703,7 +703,16 @@ class SetupWindow(Gtk.Window):
     even if this window is closed.
     """
 
-    _MODEL_SIZES = ["small", "base", "tiny", "medium", "large-v3"]
+    # Model sizes smallest -> largest, with download size for the dropdown's
+    # right-justified size column. Sizes are the total download (all files) from
+    # the Systran/faster-whisper-* HuggingFace repos. Keys match whisper._MODEL_REPOS.
+    _MODEL_SIZES = [
+        ("Tiny", "78 MB", "tiny"),
+        ("Base", "148 MB", "base"),
+        ("Small", "486 MB", "small"),
+        ("Medium", "1.5 GB", "medium"),
+        ("Large-v3", "3.1 GB", "large-v3"),
+    ]
 
     def __init__(self, app):
         super().__init__(title="EchoTray Setup")
@@ -723,46 +732,58 @@ class SetupWindow(Gtk.Window):
         hb.set_title("EchoTray Setup")
         self.set_titlebar(hb)
 
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         vbox.set_margin_start(12)
         vbox.set_margin_end(12)
+        vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
         self.add(vbox)
 
+        # ── Whisper Model box ─────────────────────────────────────────────────
+        sec, body = self._section("Whisper Model")
+
+        # Line 1: status light + "Loaded: <model>" (or "Select model"), with a
+        # load/unload toggle at the far end.
         self.model_light = _StatusLight()
-        sec, body = self._section_container("Whisper Model", self.model_light)
+        self.model_label = Gtk.Label(label="Select model")
+        self.model_label.set_xalign(0.0)
+        self.model_label.set_hexpand(True)
+        self.load_toggle = Gtk.Switch()
+        self.load_toggle.set_valign(Gtk.Align.CENTER)
+        self.load_toggle.connect("notify::active", self._on_load_toggle)
+        row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row1.pack_start(self.model_light, False, False, 0)
+        row1.pack_start(self.model_label, True, True, 0)
+        row1.pack_start(self.load_toggle, False, False, 0)
+        body.pack_start(row1, False, False, 0)
 
-        grid = Gtk.Grid(column_spacing=8, row_spacing=6)
-        grid.attach(Gtk.Label(label="Loaded:", xalign=1.0), 0, 0, 1, 1)
-        self.model_label = Gtk.Label(label="none")
-        self.model_label.set_xalign(0)
-        grid.attach(self.model_label, 1, 0, 1, 1)
-
-        grid.attach(Gtk.Label(label="Change to:", xalign=1.0), 0, 1, 1, 1)
-        self.model_combo = Gtk.ComboBoxText()
-        for s in self._MODEL_SIZES:
-            self.model_combo.append_text(s)
-        self.model_combo.set_active(0)
-        grid.attach(self.model_combo, 1, 1, 1, 1)
-
+        # Line 2: model dropdown (name left, download size right-justified),
+        # then Download and Delete buttons on the same line.
+        self.model_combo = self._build_model_combo()
         self.download_btn = Gtk.Button(label="Download")
         self.download_btn.connect("clicked", self._on_download)
-        grid.attach(self.download_btn, 2, 1, 1, 1)
+        self.delete_btn = Gtk.Button(label="Delete")
+        self.delete_btn.connect("clicked", self._on_delete_model)
+        row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row2.pack_start(self.model_combo, True, True, 0)
+        row2.pack_start(self.download_btn, False, False, 0)
+        row2.pack_start(self.delete_btn, False, False, 0)
+        body.pack_start(row2, False, False, 0)
 
+        # Progress bar spans the full width of the box.
         self.progress = Gtk.ProgressBar()
         self.progress.set_show_text(True)
         self.progress.set_text("")
-        grid.attach(self.progress, 1, 2, 2, 1)
-        body.pack_start(grid, False, False, 0)
+        self.progress.set_hexpand(True)
+        body.pack_start(self.progress, False, False, 0)
+
         vbox.pack_start(sec, False, False, 0)
 
-        # ── Language section (no status light) ───────────────────────────────
-        sec, body = self._section_container("Language")
-        lang_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
-        lang_grid.attach(Gtk.Label(label="Dictation language:", xalign=1.0), 0, 0, 1, 1)
+        # ── Settings box ──────────────────────────────────────────────────────
+        sec, body = self._section("Settings")
+
+        # Dictation language: label left, dropdown right.
         self.lang_combo = Gtk.ComboBoxText()
-        # First entry is auto-detect (empty WHISPER_LANGUAGE); the rest are
-        # common Whisper language codes.
         self._LANG_OPTIONS = [
             ("Auto-detect", ""),
             ("English", "en"),
@@ -777,89 +798,182 @@ class SetupWindow(Gtk.Window):
             self.lang_combo.append_text(label)
         self._set_combo_from_value(self.lang_combo, whisper.LANGUAGE or "", self._LANG_OPTIONS, 1)
         self.lang_combo.connect("changed", self._on_lang_changed)
-        lang_grid.attach(self.lang_combo, 1, 0, 1, 1)
-        body.pack_start(lang_grid, False, False, 0)
-        vbox.pack_start(sec, False, False, 0)
+        row = self._setting_row("Dictation language", self.lang_combo)
+        body.pack_start(row, False, False, 0)
 
-        # ── Paste delay section (no status light) ─────────────────────────────
-        sec, body = self._section_container("Paste delay")
-        paste_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
-        paste_grid.attach(Gtk.Label(label="Delay (ms):", xalign=1.0), 0, 0, 1, 1)
+        # Paste delay: label left, spin button right.
         self.paste_spin = Gtk.SpinButton.new_with_range(0, 2000, 50)
         self.paste_spin.set_value(PASTE_DELAY_MS)
         self.paste_spin.set_numeric(True)
         self.paste_spin.connect("value-changed", self._on_paste_delay_changed)
-        paste_grid.attach(self.paste_spin, 1, 0, 1, 1)
-        hint = Gtk.Label(label="Delay between copying the text and pasting it. Increase if the paste comes out blank.")
-        hint.set_line_wrap(True)
-        hint.set_max_width_chars(40)
-        hint.set_xalign(0)
-        paste_grid.attach(hint, 1, 1, 1, 1)
-        body.pack_start(paste_grid, False, False, 0)
-        vbox.pack_start(sec, False, False, 0)
+        row = self._setting_row("Paste delay (ms)", self.paste_spin)
+        body.pack_start(row, False, False, 0)
 
-        # ── Max recording length section (no status light) ──────────────────
-        sec, body = self._section_container("Max recording length")
-        rec_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
-        rec_grid.attach(Gtk.Label(label="Seconds:", xalign=1.0), 0, 0, 1, 1)
+        # Max recording length: label left, spin button right.
         self.rec_spin = Gtk.SpinButton.new_with_range(10, 3600, 10)
         self.rec_spin.set_value(whisper.MAX_RECORDING_SECONDS)
         self.rec_spin.set_numeric(True)
         self.rec_spin.connect("value-changed", self._on_rec_length_changed)
-        rec_grid.attach(self.rec_spin, 1, 0, 1, 1)
-        hint = Gtk.Label(label="How long a recording can run before it auto-stops.")
-        hint.set_line_wrap(True)
-        hint.set_max_width_chars(40)
-        hint.set_xalign(0)
-        rec_grid.attach(hint, 1, 1, 1, 1)
-        body.pack_start(rec_grid, False, False, 0)
+        row = self._setting_row("Max recording length (s)", self.rec_spin)
+        body.pack_start(row, False, False, 0)
+
         vbox.pack_start(sec, False, False, 0)
 
         self._poll_id = GLib.timeout_add(500, self._poll)
         self.connect("destroy", self._on_destroy)
 
     # ── helpers ───────────────────────────────────────────────────────────────
-    def _section_container(self, title, light=None):
-        """Return a (frame, body) where body holds the section's fields.
+    def _section(self, title, light=None):
+        """Return a (outer, body) where the heading sits OUTSIDE the box.
 
-        Uses _RoundedFrame, which draws its own border with cairo - exact,
-        theme-independent wall thickness and rounded corners (Gtk.Frame CSS
-        borders are overridden by themes and don't render reliably). `light` is
-        optional; pass None for a section with no status light.
+        Matches the Easy Effects layout: a left-aligned heading above a rounded
+        box that holds the settings. `light` is an optional status light shown
+        next to the heading.
         """
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+
+        # Heading row, outside the box, left-aligned.
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        if light is not None:
+            header.pack_start(light, False, False, 0)
+        lbl = Gtk.Label(label=title, xalign=0.0)
+        lbl.get_style_context().add_class("heading")
+        header.pack_start(lbl, False, False, 0)
+        outer.pack_start(header, False, False, 0)
+
+        # The rounded box holding the settings.
         frame = _RoundedFrame(border_width=2, radius=12)
-
-        # Inner vertical box: header row (status light + title) above the body.
-        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        header = self._section_header(title, light)
-        header.set_margin_top(8)
-        header.set_margin_start(12)
-        header.set_margin_end(12)
-        inner.pack_start(header, False, False, 0)
-
-        # Body: the caller packs the section's fields here, inside the frame.
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         body.set_margin_start(12)
         body.set_margin_end(12)
+        body.set_margin_top(12)
         body.set_margin_bottom(12)
-        inner.pack_start(body, False, False, 0)
+        frame.add(body)
+        outer.pack_start(frame, False, False, 0)
 
-        frame.add(inner)
-        return frame, body
+        return outer, body
 
-    def _section_header(self, title, light=None):
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        if light is not None:
-            box.pack_start(light, False, False, 0)
-        lbl = Gtk.Label(label=title, xalign=0.0)
-        lbl.get_style_context().add_class("heading")
+    def _setting_row(self, label, control):
+        """A single setting row: label on the left, control on the right.
+
+        Matches Easy Effects' "Spectrum frame rate cap" style — the label is
+        left-aligned and the control (dropdown/spin button) is right-aligned on
+        the same line.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        lbl = Gtk.Label(label=label, xalign=0.0)
         lbl.set_hexpand(True)
-        box.pack_start(lbl, False, False, 0)
-        return box
+        row.pack_start(lbl, True, True, 0)
+        row.pack_start(control, False, False, 0)
+        return row
+
+    def _build_model_combo(self):
+        """Build the model dropdown: name left, download size right-justified.
+
+        Uses a Gtk.ComboBox with a custom cell renderer so the size column is
+        right-aligned (Gtk.ComboBoxText can't justify a second column).
+        """
+        store = Gtk.ListStore(str, str, str)  # (display name, size string, key)
+        for name, size_str, key in self._MODEL_SIZES:
+            store.append([name, size_str, key])
+        combo = Gtk.ComboBox(model=store)
+
+        name_cell = Gtk.CellRendererText()
+        combo.pack_start(name_cell, True)
+        combo.add_attribute(name_cell, "text", 0)
+
+        size_cell = Gtk.CellRendererText()
+        size_cell.set_property("xalign", 1.0)  # right-justify the size
+        size_cell.set_property("foreground", "#888888")
+        combo.pack_start(size_cell, False)
+        combo.add_attribute(size_cell, "text", 1)
+
+        # Select the configured size by default.
+        configured = whisper.MODEL_SIZE
+        for i, (_name, _size_str, key) in enumerate(self._MODEL_SIZES):
+            if key == configured:
+                combo.set_active(i)
+                break
+        else:
+            combo.set_active(0)
+        return combo
+
+    def _selected_size(self):
+        """Return the size key currently selected in the model dropdown."""
+        idx = self.model_combo.get_active()
+        if idx < 0:
+            return "small"
+        return self._MODEL_SIZES[idx][2]
+
+    def _on_load_toggle(self, switch, _pspec):
+        """Load or unload the model selected in the dropdown.
+
+        Toggling ON loads the selected size (downloading first if needed);
+        toggling OFF unloads whatever is currently loaded.
+        """
+        if switch.get_active():
+            size = self._selected_size()
+            if size in whisper.downloaded_model_sizes():
+                self.app._start_model_load(size)
+            else:
+                self.app._start_model_download(size)
+        else:
+            # Unload the currently loaded model and drop to disabled.
+            if self.app.model is not None:
+                whisper.unload_model(self.app.model)
+                self.app.model = None
+                self.app.loaded_model_size = None
+                self.app.set_disabled()
+            self._poll()
+
+    def _on_delete_model(self, _btn):
+        """Delete the selected model, or cancel its in-progress download.
+
+        When the SELECTED model is the one being downloaded, this button reads
+        "Cancel" and cancels that download. Otherwise it deletes the selected
+        model after confirmation.
+        """
+        size = self._selected_size()
+        downloading_this = (
+            self.app._download_progress["active"]
+            and self.app._download_progress.get("size") == size
+        )
+        if downloading_this:
+            self.app._cancel_download()
+            return
+        if size not in whisper.downloaded_model_sizes():
+            notify("EchoTray", f"The '{size}' model is not downloaded.", "audio-input-microphone")
+            return
+        # Confirm before deleting (destructive, frees disk space).
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Delete the '{size}' model?",
+        )
+        dialog.format_secondary_text(
+            "This removes the downloaded model files from disk. You can "
+            "download it again later."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return
+        # If the model being deleted is the one currently loaded, unload it and
+        # drop back to the disabled state.
+        if size == self.app.loaded_model_size:
+            whisper.unload_model(self.app.model)
+            self.app.model = None
+            self.app.loaded_model_size = None
+            self.app.set_disabled()
+        whisper.delete_model(size)
+        notify("EchoTray", f"Deleted the '{size}' model.", "audio-input-microphone")
+        self._poll()
 
     def _on_download(self, _btn):
-        size = self.model_combo.get_active_text() or "small"
-        # If the selected size is already loaded, the button is a no-op ("Ready").
+        size = self._selected_size()
+        # If the selected size is already loaded, the button is a no-op.
         if size == self.app.loaded_model_size:
             return
         # If the selected size is downloaded but not loaded, load it (no re-download).
@@ -896,36 +1010,61 @@ class SetupWindow(Gtk.Window):
 
     # ── polling ──────────────────────────────────────────────────────────────
     def _poll(self):
-        # Green if ANY model is downloaded; show progress if a download is active.
         downloading = self.app._download_progress["active"]
+        size = self._selected_size()
+        downloaded = whisper.downloaded_model_sizes()
+        is_downloaded = size in downloaded
+        # Only show the "Downloading..."/"Cancel" state when the SELECTED model
+        # is the one being downloaded. If a different model is downloading, the
+        # buttons reflect the selected model's own state (Download/Delete).
+        downloading_this = downloading and self.app._download_progress.get("size") == size
+
+        # The progress bar always reflects the in-flight download (if any),
+        # regardless of which model is selected.
         if downloading:
             frac = self.app._download_progress["fraction"]
             self.progress.set_fraction(frac)
             self.progress.set_text(f"{int(frac * 100)}%")
-            self.download_btn.set_sensitive(False)
-            self.download_btn.set_label("Downloading...")
         else:
             self.progress.set_fraction(0)
             self.progress.set_text("")
-            self.download_btn.set_sensitive(True)
-            # Dynamic label for the selected size: "Ready" if it's the loaded
-            # model, "Load" if it's downloaded but not loaded, else "Download".
-            size = self.model_combo.get_active_text() or "small"
-            if size == self.app.loaded_model_size:
-                self.download_btn.set_label("Ready")
-            elif size in whisper.downloaded_model_sizes():
-                self.download_btn.set_label("Load")
-            else:
-                self.download_btn.set_label("Download")
-        downloaded = whisper.downloaded_model_sizes()
-        model_ready = bool(downloaded)
-        self.model_light.set_ok(model_ready)
-        # Show the downloaded model(s); prefer the configured/active size.
-        if model_ready:
-            shown = self.app.model_size if self.app.model_size in downloaded else downloaded[0]
-            self.model_label.set_text(shown)
+
+        if downloading_this:
+            self.download_btn.set_sensitive(False)
+            self.download_btn.set_label("Downloading...")
+            # The Delete button becomes a Cancel button during a download.
+            self.delete_btn.set_label("Cancel")
+            self.delete_btn.set_sensitive(True)
         else:
-            self.model_label.set_text("none")
+            # Download button always reads "Download"; it greys out once the
+            # selected size is already downloaded.
+            self.download_btn.set_label("Download")
+            self.download_btn.set_sensitive(not is_downloaded)
+            # Delete button greys out when the selected size isn't downloaded.
+            self.delete_btn.set_label("Delete")
+            self.delete_btn.set_sensitive(is_downloaded)
+
+        # The green light, "Loaded: <model>" label, and load toggle all reflect
+        # whether a model is actually LOADED into memory (self.app.model), NOT
+        # merely downloaded. A model can be downloaded but still loading (or
+        # failed to load), in which case the tray icon is grey and these
+        # indicators must match that, not show green.
+        loaded = self.app.model is not None
+        self.model_light.set_ok(loaded)
+        if loaded:
+            self.model_label.set_text(f"Loaded: {self.app.loaded_model_size or '?'}")
+        else:
+            self.model_label.set_text("Select model")
+        # The toggle loads/unloads the selected size. It's greyed out when the
+        # selected size isn't downloaded AND nothing is loaded (nothing to load,
+        # nothing to unload). When a model is loaded it stays active so the user
+        # can always unload it.
+        self.load_toggle.set_sensitive(is_downloaded or loaded)
+        # Sync the toggle to the loaded state without re-triggering the handler.
+        if self.load_toggle.get_active() != loaded:
+            self.load_toggle.handler_block_by_func(self._on_load_toggle)
+            self.load_toggle.set_active(loaded)
+            self.load_toggle.handler_unblock_by_func(self._on_load_toggle)
 
         return True  # keep polling
 
@@ -1070,8 +1209,11 @@ class DictationApp:
         self.model_size = whisper.MODEL_SIZE
         self.loaded_model_size = None  # size of the model currently in self.model
         self._download_thread = None
+        self._load_thread = None
+        self._download_cancel = threading.Event()
         self._download_result = {"ok": False, "error": None}
         self._download_progress = {"active": False, "fraction": 0.0, "bytes": 0, "size": None}
+        self._load_progress = {"active": False}
 
         # Set up tray indicator using our custom colored icons (absolute paths)
         self.indicator = appindicator.Indicator.new(
@@ -1161,31 +1303,42 @@ class DictationApp:
         whisper.MODEL_SIZE = size
         self._download_result = {"ok": False, "error": None}
         self._download_progress = {"active": True, "fraction": 0.0, "bytes": 0, "size": size}
+        self._download_cancel = threading.Event()
 
         def _job():
             try:
                 def cb(fraction, bytes_done):
                     self._download_progress["fraction"] = fraction
                     self._download_progress["bytes"] = bytes_done
-                whisper.download_model(size, progress_cb=cb)
+                whisper.download_model(size, progress_cb=cb, cancel_event=self._download_cancel)
                 self._download_result["ok"] = True
+            except whisper.DownloadCancelled:
+                self._download_result["error"] = "cancelled"
             except Exception as e:  # noqa: BLE001
                 self._download_result["error"] = e
             finally:
                 self._download_progress["active"] = False
                 self._download_progress["fraction"] = 1.0
                 if self._download_result["ok"]:
-                    # Load the freshly downloaded model and enable the app.
-                    # First unload any previous model so we don't hold two
-                    # Whisper models in memory at the same time.
-                    whisper.unload_model(self.model)
+                    # Only auto-load the freshly downloaded model if no other
+                    # model is currently loaded. If one is already loaded, leave
+                    # it in place and just cache the new model for later (the
+                    # user can switch to it via the toggle when ready). This
+                    # lets the user download a different size without it
+                    # yanking the model they're actively using out from under
+                    # them.
+                    if self.model is not None:
+                        print(f"Model '{size}' downloaded; keeping current model loaded.")
+                        return
                     try:
                         model = whisper.load_model(size)
                     except Exception as e:  # noqa: BLE001
                         print(f"[ERROR] Model load failed: {e}")
                         GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
                         return
-                    GLib.idle_add(self._activate_model, model)
+                    GLib.idle_add(self._activate_model, model, size)
+                elif self._download_result["error"] == "cancelled":
+                    print(f"Model '{size}' download cancelled.")
                 else:
                     err = self._download_result["error"]
                     print(f"[ERROR] Model download failed: {err}")
@@ -1194,19 +1347,24 @@ class DictationApp:
         self._download_thread = threading.Thread(target=_job, daemon=True)
         self._download_thread.start()
 
+    def _cancel_download(self):
+        """Cancel the in-progress model download (if any)."""
+        if self._download_thread is not None and self._download_thread.is_alive():
+            self._download_cancel.set()
+
     def _start_model_load(self, size):
         """Load an already-downloaded model in the background (no re-download).
 
         Used when the user picks a size that is cached but not currently loaded.
-        Mirrors _start_model_download's ownership model: the load is owned by
-        the app and continues even if the setup window closes.
+        Runs on its own thread (separate from downloads) so the user can switch
+        models even while a download is in progress.
         """
-        if self._download_thread is not None and self._download_thread.is_alive():
-            return  # a download/load is already in flight
+        if self._load_thread is not None and self._load_thread.is_alive():
+            return  # a load is already in flight
         self.model_size = size
         _write_env("MODEL_SIZE", size)
         whisper.MODEL_SIZE = size
-        self._download_progress = {"active": True, "fraction": 0.0, "bytes": 0, "size": size}
+        self._load_progress = {"active": True}
 
         def _job():
             try:
@@ -1218,17 +1376,16 @@ class DictationApp:
                 GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
                 return
             finally:
-                self._download_progress["active"] = False
-                self._download_progress["fraction"] = 1.0
-            GLib.idle_add(self._activate_model, model)
+                self._load_progress["active"] = False
+            GLib.idle_add(self._activate_model, model, size)
 
-        self._download_thread = threading.Thread(target=_job, daemon=True)
-        self._download_thread.start()
+        self._load_thread = threading.Thread(target=_job, daemon=True)
+        self._load_thread.start()
 
-    def _activate_model(self, model):
+    def _activate_model(self, model, size):
         """Set the loaded model on the app and flip it to ready (main thread)."""
         self.model = model
-        self.loaded_model_size = self.model_size
+        self.loaded_model_size = size
         self.set_ready()
         _flush_memory()
         _log_rss("after model load")
@@ -1239,6 +1396,7 @@ class DictationApp:
         """Pre-model state: grey icon, Start Recording greyed out."""
         self.state = "IDLE"
         self.indicator.set_icon_full(ICON_DISABLED, "Waiting for model")
+        self._last_icon = ICON_DISABLED
         self.status_item.set_label("Status: waiting for model")
         try:
             self.toggle_item.set_sensitive(False)
@@ -1249,6 +1407,7 @@ class DictationApp:
         """Post-model state: green idle icon, Start Recording enabled."""
         self.state = "IDLE"
         self.indicator.set_icon_full(ICON_IDLE, "Idle")
+        self._last_icon = ICON_IDLE
         self.status_item.set_label("Status: Idle")
         try:
             self.toggle_item.set_sensitive(True)
@@ -1277,12 +1436,14 @@ class DictationApp:
         # started in the meantime, in which case its icon already won).
         if self.state == "IDLE":
             self.indicator.set_icon_full(ICON_IDLE, "Idle")
+            self._last_icon = ICON_IDLE
         return False  # one-shot
 
     def set_recording(self):
         self.state = "RECORDING"
         print(f"[STATE] recording (icon={ICON_RECORDING})")
         self.indicator.set_icon_full(ICON_RECORDING, "Recording")
+        self._last_icon = ICON_RECORDING
         self.status_item.set_label("Status: Recording...")
         try:
             self.toggle_item.set_label("Stop recording")
@@ -1293,6 +1454,7 @@ class DictationApp:
         self.state = "TRANSCRIBING"
         print(f"[STATE] transcribing (icon={ICON_PROCESSING})")
         self.indicator.set_icon_full(ICON_PROCESSING, "Transcribing")
+        self._last_icon = ICON_PROCESSING
         self.status_item.set_label("Status: Transcribing...")
 
     def _on_about(self, _widget):
@@ -1491,7 +1653,7 @@ def main():
                 print(f"[ERROR] Model load failed: {e}")
                 GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
                 return
-            GLib.idle_add(app._activate_model, model)
+            GLib.idle_add(app._activate_model, model, size)
         threading.Thread(target=_load, daemon=True).start()
 
     try:

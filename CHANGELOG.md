@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.3.0] - 2026-09-04
+
+### Added
+- **Modernized Setup window (Easy Effects style).** Two boxes with headings
+  outside the box: "Whisper Model" and "Settings". The model box has a status
+  light, a "Loaded: <model>" line with a load/unload toggle, a model dropdown
+  (name left, download size right-justified, smallest to largest), Download and
+  Delete buttons, and a full-width progress bar.
+- **Model delete.** A Delete button removes a downloaded model from disk (with
+  confirmation), so users can reclaim space after trying a large model.
+- **Load/unload toggle.** Toggles the selected model in and out of memory
+  without deleting it.
+- **Download cancel.** The Delete button becomes a Cancel button while a
+  download is in progress, aborting it cleanly.
+- **Per-model file lists.** large-v3 uses `vocabulary.json` and
+  `preprocessor_config.json` (not `vocabulary.txt`), fixing a 404 on download.
+
+### Changed
+- **Model switching during download.** Loading a different (already-downloaded)
+  model now works while a download is in progress; the load and download paths
+  run on separate threads.
+- **Download auto-load.** A finished download only auto-loads the new model if
+  no other model is loaded; otherwise it's cached for later.
+- **Downloading/Cancel state is per-model.** The buttons only show
+  "Downloading..."/"Cancel" for the model actually being downloaded; other
+  models show their own Download/Delete state.
+
 ## [2.2.0] - 2026-09-03
 
 ### Added
