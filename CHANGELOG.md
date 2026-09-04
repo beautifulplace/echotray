@@ -3,10 +3,10 @@
 ## [2.3.0] - 2026-09-04
 
 ### Added
-- **Modernized Setup window (Easy Effects style).** Two boxes with headings
-  outside the box: "Whisper Model" and "Settings". The model box has a status
-  light, a "Loaded: <model>" line with a load/unload toggle, a model dropdown
-  (name left, download size right-justified, smallest to largest), Download and
+- **Modernized Setup window.** Two boxes with headings outside the box:
+  "Whisper Model" and "Settings". The model box has a status light, a
+  "Loaded: <model>" line with a load/unload toggle, a model dropdown (name
+  left, download size right-justified, smallest to largest), Download and
   Delete buttons, and a full-width progress bar.
 - **Model delete.** A Delete button removes a downloaded model from disk (with
   confirmation), so users can reclaim space after trying a large model.
