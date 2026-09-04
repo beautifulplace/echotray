@@ -46,7 +46,28 @@ _MODEL_REPOS = {
     "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
 }
+# Required files differ per model: large-v3 uses vocabulary.json (not .txt) and
+# adds preprocessor_config.json. The others share the same four files.
 _MODEL_FILES = ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"]
+_MODEL_FILES_LARGE_V3 = [
+    "config.json",
+    "tokenizer.json",
+    "vocabulary.json",
+    "preprocessor_config.json",
+    "model.bin",
+]
+
+
+def _model_files(size):
+    """Return the list of files required for a given model size."""
+    if size == "large-v3":
+        return _MODEL_FILES_LARGE_V3
+    return _MODEL_FILES
+
+
+class DownloadCancelled(Exception):
+    """Raised when a model download is cancelled by the user."""
+
 
 MODEL_CACHE_ROOT = os.getenv(
     "MODEL_DIR", os.path.join(os.path.expanduser("~"), ".local", "share", "echotray", "models")
@@ -57,8 +78,12 @@ def _model_local_dir(size):
     return os.path.join(MODEL_CACHE_ROOT, size)
 
 
-def _download_file(url, dest, progress_cb=None, chunk_size=1 << 20):
-    """Stream a file from `url` to `dest`, reporting (fraction, bytes) to progress_cb."""
+def _download_file(url, dest, progress_cb=None, chunk_size=1 << 20, cancel_event=None):
+    """Stream a file from `url` to `dest`, reporting (fraction, bytes) to progress_cb.
+
+    If `cancel_event` is set, the download aborts (raising DownloadCancelled) as
+    soon as it's observed, so a user can cancel a large download mid-flight.
+    """
     import urllib.request
 
     req = urllib.request.Request(url, headers={"User-Agent": "echotray"})
@@ -69,6 +94,8 @@ def _download_file(url, dest, progress_cb=None, chunk_size=1 << 20):
         done = 0
         with open(dest, "wb") as f:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise DownloadCancelled()
                 chunk = resp.read(chunk_size)
                 if not chunk:
                     break
@@ -85,7 +112,7 @@ def _model_complete(size):
     d = _model_local_dir(size)
     if not os.path.isdir(d):
         return False
-    for name in _MODEL_FILES:
+    for name in _model_files(size):
         p = os.path.join(d, name)
         if not os.path.isfile(p) or os.path.getsize(p) == 0:
             return False
@@ -113,13 +140,30 @@ def downloaded_model_sizes():
     return found
 
 
-def download_model(size, progress_cb=None):
+def delete_model(size):
+    """Delete a downloaded model's files from the local cache.
+
+    Returns True if a model directory was removed, False if there was nothing
+    to delete (the size was never downloaded).
+    """
+    import shutil
+    d = _model_local_dir(size)
+    if os.path.isdir(d):
+        shutil.rmtree(d)
+        return True
+    return False
+
+
+def download_model(size, progress_cb=None, cancel_event=None):
     """Download (or ensure cached) the faster-whisper model for `size`.
 
     Reports progress via progress_cb(fraction_completed, bytes_done) where the
     fraction is across ALL files (not per-file), so the progress bar advances
     smoothly from 0 to 100% once instead of resetting for each file. Returns the
     local directory containing the model, which can be passed to WhisperModel().
+
+    If `cancel_event` is set, the download aborts with DownloadCancelled as soon
+    as it's observed.
     """
     repo = _MODEL_REPOS.get(size, "small")
     base_url = f"https://huggingface.co/{repo}/resolve/main"
@@ -129,7 +173,7 @@ def download_model(size, progress_cb=None):
     # Determine which files still need downloading and their total size, so we
     # can report overall progress. Files already cached are skipped.
     to_download = []
-    for name in _MODEL_FILES:
+    for name in _model_files(size):
         dest = os.path.join(d, name)
         if os.path.isfile(dest) and os.path.getsize(dest) > 0:
             continue  # already cached
@@ -169,7 +213,7 @@ def download_model(size, progress_cb=None):
             if progress_cb:
                 progress_cb(overall, done_bytes + bytes_done)
 
-        _download_file(f"{base_url}/{name}", tmp, _file_cb)
+        _download_file(f"{base_url}/{name}", tmp, _file_cb, cancel_event=cancel_event)
         os.replace(tmp, dest)
         done_bytes += sizes.get(name, 0)
     return d
