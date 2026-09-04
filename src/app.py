@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 import os
 import pathlib
@@ -419,7 +419,16 @@ class AboutWindow(Gtk.Window):
 
         self._nav_history = []  # stack of page names, for back navigation
         self._back_btn.set_visible(False)
-        self.connect("delete-event", lambda *_: self.hide() or True)
+        self.connect("delete-event", self._on_close)
+
+    def _on_close(self, *_args):
+        # Reset to the main page so reopening the window starts fresh instead
+        # of landing on whatever subpage (Troubleshooting/Debug) was last open.
+        self._nav_history = []
+        self._stack.set_visible_child_name("main")
+        self._back_btn.set_visible(False)
+        self.hide()
+        return True  # stop the default destroy; the window is reused
 
     # ── page navigation ────────────────────────────────────────────────────────
     def _push_page(self, name):

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.1] - 2026-09-03
+
+### Fixed
+- **About window resets to the main page on close.** Closing the About window
+  while on the Troubleshooting or Debugging Information page now resets the
+  stack, so reopening it starts on the main page instead of the last-open
+  subpage.
+
 ## [2.1.0] - 2026-09-03
 
 ### Added
