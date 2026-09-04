@@ -1,10 +1,7 @@
 # EchoTray
 
-Local speech-to-text dictation for Linux (Wayland). Click the tray microphone to
+Local speech-to-text dictation for Linux (Wayland and X11). Click the tray microphone to
 start recording, click again to stop - the transcript is pasted at your cursor.
-
-**Designed for simple, non-technical use** (e.g. a parent): no hotkeys, no keyboard
-shortcuts, no terminal. Click the tray icon to talk, click it again when you're done.
 
 **Fully self-contained and offline.** The Whisper model is downloaded on first run
 and cached locally. No external LLM, no cloud service, no GPU required - it runs on
@@ -30,9 +27,10 @@ entirely local, offline architecture - is inspired by
 2. Click it once → starts recording (icon turns **red**).
 3. Click it again → recording stops and the audio is transcribed with
    **faster-whisper** (CTranslate2), using Silero VAD to filter silence.
-4. The transcript is copied to the Wayland clipboard (`wl-copy`), then the GUI asks
-   the helper daemon to inject a Ctrl+V via `/dev/uinput` - so it lands in whatever
-   field has focus (e.g. a Firefox search bar).
+4. The transcript is copied to the clipboard (`wl-copy` on Wayland, `xclip` on
+   X11), then the GUI asks the helper daemon to inject a Ctrl+V via
+   `/dev/uinput` - so it lands in whatever field has focus (e.g. a Firefox
+   search bar).
 
 ## Architecture
 
@@ -46,7 +44,7 @@ EchoTray is split into two processes to minimize the privileges needed by the GU
 │                             │  UNIX  │  -- owns /dev/uinput        │
 │  · mic recording            │ socket │                             │
 │  · Whisper transcription    │───────▶│  · injects Ctrl+V (paste)   │
-│  · wl-copy (clipboard)      │        │                             │
+│  · clipboard (wl-copy/xclip)│        │                             │
 │  · tray icon / notifications│        │                             │
 └─────────────────────────────┘        └─────────────────────────────┘
 ```

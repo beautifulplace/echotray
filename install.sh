@@ -27,6 +27,7 @@ _REQUIRED_PACKAGES=(
     python3-dev
     python3-venv
     wl-clipboard
+    xclip
     libportaudio2
     portaudio19-dev
     gir1.2-ayatanaappindicator3-0.1
