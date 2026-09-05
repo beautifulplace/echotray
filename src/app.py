@@ -138,7 +138,7 @@ NOTIFY_VERBOSE         = os.getenv("NOTIFY_VERBOSE",         "false").lower() ==
 def notify(summary, body="", icon="audio-input-microphone", urgency="normal"):
     """Send a desktop notification and print to terminal.
 
-    Notifications are marked transient (hint `string:transient:true`) so the
+    Notifications are marked transient (hint `int:transient:1`) so the
     notification daemon does NOT keep them in the notification tray/center -
     they show briefly and disappear, instead of stacking up to the top of the
     screen. A short timeout (5s) also auto-dismisses them.
@@ -146,7 +146,7 @@ def notify(summary, body="", icon="audio-input-microphone", urgency="normal"):
     print(f"[{summary}] {body}" if body else f"[{summary}]")
     args = [
         "notify-send", "-i", icon, "-u", urgency,
-        "-t", "5000", "-h", "string:transient:true",
+        "-t", "5000", "-h", "int:transient:1",
         summary,
     ]
     if body:
