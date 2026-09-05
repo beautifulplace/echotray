@@ -3,7 +3,7 @@
 Local speech-to-text dictation for Linux (Wayland and X11). Click the tray microphone to
 start recording, click again to stop - the transcript is pasted at your cursor.
 
-[![version](https://img.shields.io/badge/version-2.3.1-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
+[![version](https://img.shields.io/badge/version-2.3.2-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
 
 **Fully self-contained and offline.** The Whisper model is downloaded on first run
 and cached locally. No external LLM, no cloud service, no GPU required - it runs on
@@ -34,6 +34,7 @@ entirely local, offline architecture - is inspired by
 - [Usage](#usage)
 - [Tray Icon Menu](#tray-icon-menu)
 - [Clipboard behavior](#clipboard-behavior)
+- [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -187,6 +188,24 @@ injecting Ctrl+V. This **overwrites whatever was previously on your clipboard**.
 If you want to keep a history of everything you copy, install a clipboard
 manager for your desktop (e.g. a GNOME clipboard-indicator extension, or
 cliphist on wlroots-based compositors).
+
+## Testing
+
+The project ships an **offline, dependency-free unit test suite** for the pure
+model-cache / download / transcription logic in `src/whisper.py`. It needs no
+audio device, no GPU, and no network — the heavy ML deps (`faster-whisper`,
+`sounddevice`, `numpy`) are imported lazily, so nothing extra is pulled in just
+to import the module.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"   # pytest + ruff
+.venv/bin/python -m pytest          # all tests pass offline
+```
+
+Configuration is exercised directly, including the guard against a malformed
+`.env` value crashing the app at import (it falls back to the default with a
+warning instead).
 
 ## Troubleshooting
 

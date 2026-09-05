@@ -8,3 +8,11 @@ docs/superpowers/
 
 # Rust build artifacts
 target/
+
+# Python tooling
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.eggs/
