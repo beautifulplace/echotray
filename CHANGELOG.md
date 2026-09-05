@@ -19,6 +19,9 @@
   import inside the functions that use them, so importing the module stays
   stdlib-only and instant.
 
+*Thanks to [@ghostfix-pm](https://github.com/ghostfix-pm) for the crash-proof
+config parsing, lazy imports, `.part` cleanup, and the test suite.*
+
 ## [2.3.1] - 2026-09-04
 
 ### Changed
