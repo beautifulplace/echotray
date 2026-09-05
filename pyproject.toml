@@ -5,7 +5,7 @@
 # record the dev/test extra for contributors.
 [project]
 name = "echotray"
-version = "2.3.2"
+version = "2.4.0"
 description = "Local offline speech-to-text dictation for Linux (Wayland & X11). Click the tray mic, speak, and the transcript is pasted at your cursor."
 readme = "README.md"
 requires-python = ">=3.10"

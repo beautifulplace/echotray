@@ -34,6 +34,11 @@ _REQUIRED_PACKAGES=(
     libnotify-bin
 )
 
+# ECHOTRAY_SKIP_ROOT=1 skips the root-only steps (apt packages + helper daemon).
+# The in-app upgrade flow sets this, since those are already installed on an
+# existing install and the upgrade runs unprivileged.
+SKIP_ROOT="${ECHOTRAY_SKIP_ROOT:-0}"
+
 _missing_packages() {
     local missing=""
     for pkg in "${_REQUIRED_PACKAGES[@]}"; do
@@ -44,18 +49,26 @@ _missing_packages() {
     echo "$missing"
 }
 
-MISSING=$(_missing_packages)
-if [ -n "$MISSING" ]; then
-    echo "[1/4] Installing missing system packages...$MISSING"
-    sudo apt install -y $MISSING
+if [ "$SKIP_ROOT" = "1" ]; then
+    echo "[1/4] Skipping system packages (ECHOTRAY_SKIP_ROOT=1)."
 else
-    echo "[1/4] All required system packages are already installed - skipping apt."
+    MISSING=$(_missing_packages)
+    if [ -n "$MISSING" ]; then
+        echo "[1/4] Installing missing system packages...$MISSING"
+        sudo apt install -y $MISSING
+    else
+        echo "[1/4] All required system packages are already installed - skipping apt."
+    fi
 fi
 
 # Build + install the privileged helper daemon (requires root)
 echo ""
-echo "[2/4] Ensuring the privileged helper daemon (echotray-helperd)..."
-sudo bash "$SCRIPT_DIR/helper_install.sh"
+if [ "$SKIP_ROOT" = "1" ]; then
+    echo "[2/4] Skipping helper daemon (ECHOTRAY_SKIP_ROOT=1)."
+else
+    echo "[2/4] Ensuring the privileged helper daemon (echotray-helperd)..."
+    sudo bash "$SCRIPT_DIR/helper_install.sh"
+fi
 
 # Copy the app source into the install dir (idempotent)
 echo ""
@@ -147,11 +160,17 @@ echo "  Installed: $DESKTOP_FILE"
 # Create a simple CLI wrapper so the app can be run with just 'echotray'
 # instead of the full venv python path. It launches the app detached (new
 # session, backgrounded) so EchoTray keeps running after the terminal closes.
+# Subcommands (upgrade/check/ignore) run the GTK-free CLI in the foreground.
 WRAPPER="$INSTALL_DIR/echotray"
 cat > "$WRAPPER" <<EOF
 #!/usr/bin/env bash
-# EchoTray launcher - runs the app detached so it survives closing the terminal.
-setsid "$VENV_PYTHON" "$APP_SCRIPT" "\$@" </dev/null >>/tmp/echotray.log 2>&1 &
+# EchoTray launcher. With no arguments it runs the app detached so it survives
+# closing the terminal. With a subcommand (upgrade/check/ignore) it runs the
+# maintenance CLI in the foreground.
+if [ "\$#" -gt 0 ]; then
+    exec "$VENV_PYTHON" "$APP_DIR/src/cli.py" "\$@"
+fi
+setsid "$VENV_PYTHON" "$APP_SCRIPT" </dev/null >>/tmp/echotray.log 2>&1 &
 EOF
 chmod +x "$WRAPPER"
 echo "  Installed CLI wrapper: $WRAPPER"

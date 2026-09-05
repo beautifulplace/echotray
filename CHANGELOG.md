@@ -1,5 +1,37 @@
 # Changelog
 
+## [2.4.0] - 2026-09-05
+
+### Added
+- **In-app update checking.** The About window now checks for a newer version
+  when opened. If one is available, an orange pill shows the new version with
+  Update and Ignore version buttons. Ignoring a version hides the pill until a
+  newer one appears.
+- **Command-line updater.** A new `echotray` CLI (`upgrade`, `upgrade --sudo`,
+  `check`, `ignore <version>`) installs updates from the terminal, including
+  privileged releases that change the helper daemon or system packages.
+- **Sudo-required update handling.** A release can be marked as needing a
+  privileged install with a standalone `[requires-sudo]` line in its release
+  notes. The About window then shows a copyable `echotray upgrade --sudo`
+  command instead of the Update/Ignore buttons, and the CLI stops with a clear
+  message if `--sudo` wasn't passed.
+- **CLI auto-restart.** After a successful `echotray upgrade`, a running
+  EchoTray instance is detected (via the single-instance lock file), stopped
+  cleanly, and relaunched automatically.
+
+### Changed
+- **Friendly download errors.** Model download failures now show a short,
+  human-friendly message (e.g. "check your internet connection") instead of a
+  raw urllib error.
+
+### Fixed
+- **Restart relaunches through the wrapper.** The Restart button now invokes
+  the installed `echotray` wrapper (preserving the venv python, detached
+  session, and log redirect) instead of re-invoking `app.py` directly.
+- **Safer CLI restart.** The updater verifies the lock-file PID is actually an
+  EchoTray process before signaling it, so a reused PID can't cause an
+  unrelated process to be killed.
+
 ## [2.3.2] - 2026-09-04
 
 ### Added
