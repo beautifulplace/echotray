@@ -539,6 +539,40 @@ def test_transcribe_audio_empty_has_no_trailing_space():
     assert whisper.transcribe_audio(model, b"\x00") == ""
 
 
+# ── friendly_download_error ─────────────────────────────────────────────────
+
+def test_friendly_download_error_dns_failure():
+    import socket
+    import urllib.error
+    err = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+    msg = whisper.friendly_download_error(err)
+    assert "internet" in msg.lower()
+
+
+def test_friendly_download_error_http_404():
+    import urllib.error
+    err = urllib.error.HTTPError("https://x", 404, "Not Found", {}, None)
+    msg = whisper.friendly_download_error(err)
+    assert "weren't found" in msg
+
+
+def test_friendly_download_error_http_429():
+    import urllib.error
+    err = urllib.error.HTTPError("https://x", 429, "Too Many", {}, None)
+    msg = whisper.friendly_download_error(err)
+    assert "busy" in msg
+
+
+def test_friendly_download_error_timeout():
+    msg = whisper.friendly_download_error(TimeoutError("timed out"))
+    assert "timed out" in msg
+
+
+def test_friendly_download_error_generic():
+    msg = whisper.friendly_download_error(RuntimeError("boom"))
+    assert "failed" in msg
+
+
 # ── AudioRecorder (needs numpy for the array paths) ──────────────────────────
 
 def test_audio_recorder_stop_empty_returns_empty_array(tmp_path, monkeypatch):

@@ -103,6 +103,43 @@ class DownloadCancelled(Exception):
     """Raised when a model download is cancelled by the user."""
 
 
+def friendly_download_error(err):
+    """Turn a raw download exception into a short, human-friendly message.
+
+    The raw urllib errors (e.g. "urlopen error [Errno -3] Temporary failure in
+    name resolution") are cryptic. This maps the common cases to something a
+    non-technical user can act on, and falls back to a generic message rather
+    than dumping the exception text.
+    """
+    import urllib.error
+
+    # HTTP errors first: HTTPError is a subclass of URLError, so it must be
+    # checked before the URLError branch below.
+    if isinstance(err, urllib.error.HTTPError):
+        code = getattr(err, "code", None)
+        if code == 404:
+            return "The model files weren't found on the server. Please try again later."
+        if code in (403, 429):
+            return "The download server is busy or blocked the request. Please try again in a moment."
+        return "The download server returned an error. Please try again later."
+
+    # DNS / name resolution failures (no internet, flaky DNS, VPN blocking).
+    if isinstance(err, urllib.error.URLError):
+        reason = getattr(err, "reason", None)
+        if isinstance(reason, OSError) and reason.errno in (-2, -3, -5):
+            return "Couldn't reach the download server. Check your internet connection and try again."
+        if isinstance(reason, OSError) and reason.errno in (101, 110, 111, 113):
+            return "Couldn't reach the download server. Check your internet connection and try again."
+        return "Couldn't reach the download server. Check your internet connection and try again."
+
+    # Socket timeouts.
+    if isinstance(err, TimeoutError):
+        return "The download timed out. Check your internet connection and try again."
+
+    # Anything else: keep it friendly and generic.
+    return "The download failed. Check your internet connection and try again."
+
+
 MODEL_CACHE_ROOT = os.getenv(
     "MODEL_DIR", os.path.join(os.path.expanduser("~"), ".local", "share", "echotray", "models")
 )

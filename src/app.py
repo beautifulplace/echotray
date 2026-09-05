@@ -13,8 +13,6 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.3.2"
-
 import os
 import pathlib
 import gc
@@ -26,6 +24,9 @@ import time
 
 import gi
 from dotenv import load_dotenv
+
+import updater
+from version import __version__, REPO_URL
 
 # Try to release freed glibc heap arenas back to the OS after dictation; this is
 # available on glibc/Linux. If ctypes is missing, flushing is a no-op.
@@ -75,8 +76,8 @@ load_dotenv()
 
 # The real .env lives in the install dir (one level above app/), e.g.
 # ~/.local/share/echotray/.env. load_dotenv() finds it by searching upward
-# from this file; _DOTENV_PATH is the same location for writing settings.
-_DOTENV_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / ".env"
+# from this file; the updater module resolves the same location for writing
+# settings (see updater.read_env / updater.write_env).
 
 
 def _write_env(key, value):
@@ -85,23 +86,8 @@ def _write_env(key, value):
     Used by both the Setup window (for the selector settings) and the app (for
     the model size), so any setting changed in the UI persists across restarts.
     """
-    path = _DOTENV_PATH
-    try:
-        lines = path.read_text().splitlines() if path.exists() else []
-    except OSError:
-        return
-    found = False
-    for i, line in enumerate(lines):
-        if line.strip().startswith(key + "="):
-            lines[i] = f"{key}={value}"
-            found = True
-            break
-    if not found:
-        lines.append(f"{key}={value}")
-    try:
-        path.write_text("\n".join(lines) + "\n")
-    except OSError:
-        pass
+    updater.write_env(key, value)
+
 
 # Startup log: everything printed (and any traceback) is also written here, so
 # launching from a desktop icon (no terminal) still leaves a record of what
@@ -198,6 +184,23 @@ entry {
     border-radius: 999px;
     padding: 2px 10px;
 }
+.version-pill-update {
+    background-color: #e66100;
+    color: #ffffff;
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+.update-btn {
+    background-color: #e66100;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+.update-btn-secondary {
+    background-color: rgba(128, 128, 128, 0.35);
+    border-radius: 4px;
+    padding: 4px 12px;
+}
 .monospace {
     font-family: monospace;
 }
@@ -226,10 +229,12 @@ def _apply_theme():
 # ── Single-instance guard ─────────────────────────────────────────────────────
 
 _LOCK_PATH = "/tmp/echotray.lock"
+_LOCK_FD = None  # held open for the process lifetime; closed on restart
 
 
 def _acquire_single_instance() -> bool:
     """Ensure only one EchoTray instance runs. Returns True if we got the lock."""
+    global _LOCK_FD
     try:
         fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
         import fcntl
@@ -237,10 +242,24 @@ def _acquire_single_instance() -> bool:
         # Write our PID so diagnostics can see who holds the lock.
         os.ftruncate(fd, 0)
         os.write(fd, str(os.getpid()).encode())
+        _LOCK_FD = fd
         return True
     except (BlockingIOError, OSError):
         # Another instance holds the lock.
         return False
+
+
+def _release_single_instance():
+    """Release the single-instance lock (used before restarting the app)."""
+    global _LOCK_FD
+    if _LOCK_FD is not None:
+        try:
+            import fcntl
+            fcntl.flock(_LOCK_FD, fcntl.LOCK_UN)
+            os.close(_LOCK_FD)
+        except OSError:
+            pass
+        _LOCK_FD = None
 
 
 # ── Setup window (non-modal, single Whisper Model section) ───────────────────
@@ -332,8 +351,6 @@ class AboutWindow(Gtk.Window):
     debugging info).
     """
 
-    REPO_URL = "https://github.com/beautifulplace/echotray"
-
     def __init__(self, app):
         super().__init__(title="About EchoTray")
         self.app = app
@@ -405,6 +422,136 @@ class AboutWindow(Gtk.Window):
     def _show_debug(self, _row):
         self._push_page("debug")
 
+    # ── update checking ────────────────────────────────────────────────────────
+    def _check_update(self):
+        """Check for a newer version and show the update row if one exists.
+
+        Runs the network check in a background thread so opening the About
+        window stays instant. The ignored version (from .env) is respected, so
+        an ignored version won't re-show until a newer one appears. Also
+        determines whether the update needs a privileged (sudo) install.
+        """
+        self._latest_version = None
+        # Hide any previously-shown update row so a stale result doesn't linger
+        # while the new check runs (or if it finds nothing).
+        self._update_box.hide()
+
+        def _job():
+            latest = updater.latest_available_version()
+            if latest is None:
+                return
+            requires_sudo = updater.update_requires_sudo(latest)
+            GLib.idle_add(self._show_update, latest, requires_sudo)
+
+        threading.Thread(target=_job, daemon=True).start()
+
+    def _show_update(self, version, requires_sudo=False):
+        self._latest_version = version
+        self._update_pill.set_text(version)
+        # Reveal the box and exactly one of its two variants. The variants carry
+        # no_show_all so the initial win.show_all() doesn't reveal them; we show
+        # them explicitly here (show_all() recurses into their children, which
+        # don't carry no_show_all).
+        self._update_pill.show()
+        if requires_sudo:
+            self._update_line.hide()
+            self._sudo_box.show_all()
+        else:
+            self._sudo_box.hide()
+            self._update_line.show_all()
+        self._update_box.show()
+
+    def _on_ignore_version(self, _btn):
+        if self._latest_version:
+            updater.ignore_version(self._latest_version)
+        self._update_box.hide()
+
+    def _on_copy_sudo_cmd(self, _btn):
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(self._sudo_cmd.get_text(), -1)
+        self._sudo_copy_btn.set_label("Copied")
+        # Reset the label after a moment so a second copy reads correctly.
+        GLib.timeout_add(1500, self._sudo_copy_btn.set_label, "Copy")
+
+    def _on_upgrade(self, _btn):
+        version = self._latest_version
+        if not version:
+            return
+        self._upgrade_btn.set_sensitive(False)
+        self._upgrade_btn.set_label("Updating...")
+
+        def _job():
+            try:
+                self._do_upgrade(version)
+            except Exception as e:
+                GLib.idle_add(notify, "EchoTray",
+                              f"Upgrade failed: {e}", "audio-input-microphone", "critical")
+                GLib.idle_add(self._upgrade_failed)
+                return
+            GLib.idle_add(self._upgrade_done)
+
+        threading.Thread(target=_job, daemon=True).start()
+
+    def _upgrade_failed(self):
+        # Restore the pre-upgrade state so the user can retry or ignore.
+        self._upgrade_btn.set_sensitive(True)
+        self._upgrade_btn.set_label("Update")
+
+    def _upgrade_done(self):
+        # Upgrade succeeded: the new version is installed but not running yet.
+        # Flip the line to "Restart now" with a Restart button; drop the Ignore
+        # button (there's nothing to ignore once the update is applied).
+        self._update_status.set_text("Restart now \u203a")
+        self._upgrade_btn.set_sensitive(True)
+        self._upgrade_btn.set_label("Restart")
+        self._ignore_btn.hide()
+        # Reconnect the button to restart the app instead of upgrading again.
+        self._upgrade_btn.disconnect_by_func(self._on_upgrade)
+        self._upgrade_btn.connect("clicked", self._on_restart)
+
+    def _on_restart(self, _btn):
+        # Relaunch the app and quit this instance. Release the single-instance
+        # lock FIRST so the new process can acquire it (otherwise it would see
+        # the lock held and exit immediately).
+        _release_single_instance()
+        try:
+            # Prefer the installed `echotray` wrapper: it re-launches with the
+            # correct venv python, detached session, and log redirect. Fall back
+            # to re-invoking app.py directly (dev clone / wrapper missing).
+            wrapper = updater.wrapper_path()
+            if wrapper:
+                subprocess.Popen(
+                    [wrapper],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    close_fds=True, start_new_session=True,
+                )
+            else:
+                script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
+                subprocess.Popen(
+                    [sys.executable, script],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    close_fds=True, start_new_session=True,
+                )
+        except Exception as e:
+            print(f"[ERROR] Restart failed: {e}")
+            notify("EchoTray", f"Restart failed: {e}", "audio-input-microphone", "critical")
+            return
+        # Quit the current instance.
+        self.app._on_quit(None)
+
+    def _do_upgrade(self, version):
+        """Download the new source tarball and run install.sh to apply it.
+
+        Runs install.sh unprivileged with ECHOTRAY_SKIP_ROOT=1 (skips the
+        already-installed apt packages and helper daemon), so the install dir
+        and venv stay owned by the user. If a future release needs root (new
+        helper daemon or system packages), the user runs `echotray upgrade`
+        from a terminal instead, which does a full sudo install.
+        """
+        updater.download_and_install(version, skip_root=True)
+        # No notification here: the About window flips to "Restart now" with a
+        # Restart button, which is the clearer prompt.
+
     # ── main page ──────────────────────────────────────────────────────────────
     def _build_main_page(self):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -437,6 +584,70 @@ class AboutWindow(Gtk.Window):
         pill.get_style_context().add_class("version-pill")
         header.pack_start(pill, False, False, 0)
 
+        # Update section: an orange pill (same size as the green pill, centered
+        # directly under it), then a button line below with "Update available"
+        # text + Update + Ignore buttons. Hidden until a newer version is found
+        # (and not ignored). Built here so it can be shown/hidden in place.
+        self._update_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._update_box.set_halign(Gtk.Align.CENTER)
+
+        self._update_pill = Gtk.Label(label="", xalign=0.5)
+        self._update_pill.set_halign(Gtk.Align.CENTER)
+        self._update_pill.get_style_context().add_class("version-pill-update")
+        self._update_box.pack_start(self._update_pill, False, False, 0)
+
+        self._update_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._update_line.set_halign(Gtk.Align.CENTER)
+        self._update_status = Gtk.Label(label="Update available \u203a", xalign=0.5)
+        self._upgrade_btn = Gtk.Button(label="Update")
+        self._upgrade_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._upgrade_btn.get_style_context().add_class("update-btn")
+        self._upgrade_btn.connect("clicked", self._on_upgrade)
+        self._ignore_btn = Gtk.Button(label="Ignore version")
+        self._ignore_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._ignore_btn.get_style_context().add_class("update-btn-secondary")
+        self._ignore_btn.connect("clicked", self._on_ignore_version)
+        self._update_line.pack_start(self._update_status, False, False, 0)
+        self._update_line.pack_start(self._upgrade_btn, False, False, 0)
+        self._update_line.pack_start(self._ignore_btn, False, False, 0)
+        self._update_box.pack_start(self._update_line, False, False, 0)
+
+        # Sudo-required variant: shown instead of the button line when the
+        # release needs a privileged install. Explains why, and offers the
+        # command in a copyable box.
+        self._sudo_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._sudo_box.set_halign(Gtk.Align.CENTER)
+        self._sudo_box.set_margin_start(12)
+        self._sudo_box.set_margin_end(12)
+
+        self._sudo_label = Gtk.Label(
+            label=("This update changes the privileged helper and needs "
+                   "administrator access, so it must be run from the command "
+                   "line. Copy the command below and paste it into a terminal."),
+            xalign=0.0, wrap=True)
+        self._sudo_label.set_line_wrap(True)
+        self._sudo_label.set_max_width_chars(44)
+        self._sudo_label.set_halign(Gtk.Align.CENTER)
+        self._sudo_box.pack_start(self._sudo_label, False, False, 0)
+
+        cmd_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        cmd_row.set_halign(Gtk.Align.CENTER)
+        self._sudo_cmd = Gtk.Entry()
+        self._sudo_cmd.set_text("echotray upgrade --sudo")
+        self._sudo_cmd.set_editable(False)
+        self._sudo_cmd.set_width_chars(24)
+        self._sudo_cmd.get_style_context().add_class("monospace")
+        self._sudo_copy_btn = Gtk.Button(label="Copy")
+        self._sudo_copy_btn.connect("clicked", self._on_copy_sudo_cmd)
+        cmd_row.pack_start(self._sudo_cmd, False, False, 0)
+        cmd_row.pack_start(self._sudo_copy_btn, False, False, 0)
+        self._sudo_box.pack_start(cmd_row, False, False, 0)
+
+        self._update_box.pack_start(self._sudo_box, False, False, 0)
+
+        self._update_box.set_no_show_all(True)
+        header.pack_start(self._update_box, False, False, 0)
+
         vbox.pack_start(header, False, False, 0)
 
         # The app description as a plain (non-button) row, no icon (the icon is
@@ -465,7 +676,7 @@ class AboutWindow(Gtk.Window):
         rows.set_margin_bottom(12)
 
         # Website — opens the repo; tooltip shows the URL.
-        rows.add(self._button_row("Website", "website", chevron=True, tooltip=self.REPO_URL))
+        rows.add(self._button_row("Website", "website", chevron=True, tooltip=REPO_URL))
 
         # Troubleshooting — slides over to a "how to use debugging info" page.
         rows.add(self._button_row("Troubleshooting", "troubleshooting", chevron=True))
@@ -642,7 +853,7 @@ class AboutWindow(Gtk.Window):
 
     def _open_website(self, *_args):
         try:
-            Gtk.show_uri_on_window(self, self.REPO_URL, Gdk.CURRENT_TIME)
+            Gtk.show_uri_on_window(self, REPO_URL, Gdk.CURRENT_TIME)
         except Exception as e:  # noqa: BLE001
             print(f"[ABOUT] Failed to open website: {e}")
 
@@ -1310,8 +1521,9 @@ class DictationApp:
                     print(f"Model '{size}' download cancelled.")
                 else:
                     err = self._download_result["error"]
+                    msg = whisper.friendly_download_error(err)
                     print(f"[ERROR] Model download failed: {err}")
-                    GLib.idle_add(notify, "EchoTray", f"Model download failed: {err}", "audio-input-microphone", "critical")
+                    GLib.idle_add(notify, "EchoTray", msg, "audio-input-microphone", "critical")
 
         self._download_thread = threading.Thread(target=_job, daemon=True)
         self._download_thread.start()
@@ -1431,12 +1643,14 @@ class DictationApp:
         # new one each time (and leaking the old one).
         if self._about_dialog is not None:
             self._about_dialog.present()
+            self._about_dialog._check_update()
             return
         win = AboutWindow(self)
         self._about_dialog = win
         win.connect("destroy", self._on_about_response)
         win.show_all()
         win.present()
+        win._check_update()
 
     def _on_about_response(self, dialog, _response=None):
         # Clear the cached reference so the next About click builds a fresh
