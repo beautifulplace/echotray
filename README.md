@@ -32,6 +32,7 @@ entirely local, offline architecture - is inspired by
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Updating](#updating)
 - [Tray Icon Menu](#tray-icon-menu)
 - [Clipboard behavior](#clipboard-behavior)
 - [Testing](#testing)
@@ -114,6 +115,9 @@ The setup script:
 - Installs the app into `~/.local/share/echotray/` (app code, its venv, config,
   and the downloaded model), creating a Python venv and installing dependencies
 - Installs a `.desktop` launcher
+- Installs an `echotray` command (a wrapper symlinked into `~/.local/bin`) that
+  launches the app and provides the update/maintenance subcommands (see
+  **Updating** below)
 
 Everything EchoTray owns lives under **`~/.local/share/echotray/`**:
 - `app/` - the app source
@@ -168,6 +172,32 @@ isn't on your PATH, run it as
 The tray icon's color shows the state: **green** = ready, **red** = recording,
 **amber** = transcribing.
 
+## Updating
+
+EchoTray checks for updates automatically when you open the **About** window.
+If a newer version is available, an orange pill shows the new version number
+with **Update** and **Ignore version** buttons.
+
+- **Update** downloads and installs the new version in place, then prompts you
+  to restart.
+- **Ignore version** hides the update prompt until a newer version appears.
+
+You can also update from the command line with the `echotray` command:
+
+```bash
+echotray check              # show the latest available version
+echotray upgrade            # install the latest version
+echotray upgrade --sudo     # full install (for privileged releases)
+echotray ignore <version>   # hide the update prompt for a version
+```
+
+Most updates install without extra privileges. A release that changes the
+helper daemon or adds system packages is marked as needing a privileged
+install; the About window then shows a copyable `echotray upgrade --sudo`
+command instead of the Update button, and the CLI stops with a clear message if
+you run `echotray upgrade` without `--sudo`. After a command-line upgrade, a
+running EchoTray instance is restarted automatically.
+
 ## Tray Icon Menu
 
 Right-clicking the tray icon opens a menu with:
@@ -178,7 +208,8 @@ Right-clicking the tray icon opens a menu with:
   a model is loaded; red means none. Below the model section are simple
   selectors for the dictation language, the paste delay, and the max recording
   length.
-- **About** - app name, version, and description
+- **About** - app name, version, and description. Opening it also checks for
+  updates (see **Updating** above).
 - **Quit** - exits the app
 
 ## Clipboard behavior
@@ -192,10 +223,10 @@ cliphist on wlroots-based compositors).
 ## Testing
 
 The project ships an **offline, dependency-free unit test suite** for the pure
-model-cache / download / transcription logic in `src/whisper.py`. It needs no
-audio device, no GPU, and no network — the heavy ML deps (`faster-whisper`,
-`sounddevice`, `numpy`) are imported lazily, so nothing extra is pulled in just
-to import the module.
+model-cache / download / transcription logic in `src/whisper.py` and the
+update-checking logic in `src/updater.py`. It needs no audio device, no GPU,
+and no network — the heavy ML deps (`faster-whisper`, `sounddevice`, `numpy`)
+are imported lazily, so nothing extra is pulled in just to import the module.
 
 ```bash
 python3 -m venv .venv
@@ -205,7 +236,9 @@ python3 -m venv .venv
 
 Configuration is exercised directly, including the guard against a malformed
 `.env` value crashing the app at import (it falls back to the default with a
-warning instead).
+warning instead). The updater tests cover version parsing/comparison, the
+ignored-version gate, sudo-required release detection, and the safe-restart
+logic (including the guard against signaling a reused PID).
 
 ## Troubleshooting
 
