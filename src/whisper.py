@@ -6,13 +6,19 @@ transcription, and the on-demand model download with progress reporting.
 """
 
 import os
+import sys
 import threading
 import time
 
-import numpy as np
-import sounddevice as sd
-from dotenv import load_dotenv
-from faster_whisper import WhisperModel
+# Heavy or optional third-party imports are loaded lazily inside the functions
+# that need them (numpy/sounddevice/faster-whisper). That keeps this module
+# importable with nothing but the stdlib, so the pure model-cache/download
+# logic can be unit-tested without the ~100 MB ML stack, and importing it stays
+# instant (the faster-whisper import alone pulls in ctranslate2/onnxruntime).
+try:
+    from dotenv import load_dotenv
+except ImportError:  # python-dotenv is optional; we just skip loading .env
+    load_dotenv = lambda: None
 
 load_dotenv()
 
@@ -26,14 +32,42 @@ _TRANSCRIBE_LOCK = threading.Lock()
 MODEL_SIZE = os.getenv("MODEL_SIZE", "small")
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "int8")
 LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en") or None  # empty string → None = auto-detect
-SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))
-CHANNELS = int(os.getenv("CHANNELS", "1"))
-MAX_RECORDING_SECONDS = int(os.getenv("MAX_RECORDING_SECONDS", "300"))
+
+
+def env_int(name, default, lo=None, hi=None):
+    """Read an integer from the environment, falling back to `default`.
+
+    A hand-edited .env can easily hold a non-numeric value (a paste misfire, a
+    stray character), and a plain `int(os.getenv(...))` would crash the whole
+    app at import with a ValueError traceback. Instead we warn on stderr and
+    fall back to `default`. Optional `lo`/`hi` bounds clamp clearly-broken
+    values instead of letting them through.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"[config] ignoring invalid {name}={raw!r}; using {default}", file=sys.stderr)
+        return default
+    if lo is not None and value < lo:
+        print(f"[config] clamping {name}={value} to {lo}", file=sys.stderr)
+        return lo
+    if hi is not None and value > hi:
+        print(f"[config] clamping {name}={value} to {hi}", file=sys.stderr)
+        return hi
+    return value
+
+
+SAMPLE_RATE = env_int("SAMPLE_RATE", 16000, lo=8000)
+CHANNELS = env_int("CHANNELS", 1, lo=1, hi=2)
+MAX_RECORDING_SECONDS = env_int("MAX_RECORDING_SECONDS", 300, lo=1)
 # Number of CPU threads CTranslate2 uses for transcription. CTranslate2 defaults
 # to one thread per core, and each thread carries stack + buffers, so capping it
 # trims resident memory and often improves CPU latency by avoiding thread
 # thrash. 4 is a good balance for a laptop.
-CPU_THREADS = int(os.getenv("CPU_THREADS", "4"))
+CPU_THREADS = env_int("CPU_THREADS", 4, lo=1)
 
 
 # ── Whisper Model ─────────────────────────────────────────────────────────────
@@ -213,7 +247,18 @@ def download_model(size, progress_cb=None, cancel_event=None):
             if progress_cb:
                 progress_cb(overall, done_bytes + bytes_done)
 
-        _download_file(f"{base_url}/{name}", tmp, _file_cb, cancel_event=cancel_event)
+        try:
+            _download_file(f"{base_url}/{name}", tmp, _file_cb, cancel_event=cancel_event)
+        except DownloadCancelled:
+            # Don't leave a stale partial file cluttering the cache dir after a
+            # user cancels a download; remove it and re-raise so the UI can
+            # report the cancellation.
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+            raise
         os.replace(tmp, dest)
         done_bytes += sizes.get(name, 0)
     return d
@@ -233,6 +278,10 @@ def load_model(size=None):
 
     print(f"Loading Whisper model ({size}, device=cpu, compute={compute_type})... ", end="", flush=True)
     start = time.monotonic()
+
+    # Imported lazily so importing this module never pulls in the heavy ML
+    # stack (ctranslate2/onnxruntime) — only needed once we actually load.
+    from faster_whisper import WhisperModel
 
     # Load from our local cache if present; otherwise let faster-whisper download.
     local_dir = _model_local_dir(size)
@@ -277,6 +326,8 @@ class AudioRecorder:
 
     def start(self):
         self.chunks = []
+        import sounddevice as sd  # lazy: portable audio only needed at record time
+
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
@@ -304,6 +355,8 @@ class AudioRecorder:
             t = threading.Thread(target=_teardown, daemon=True)
             t.start()
             t.join(timeout=3.0)
+        import numpy as np  # lazy: numeric array ops only needed to build the buffer
+
         if not self.chunks:
             return np.array([], dtype="float32")
         audio = np.concatenate(self.chunks, axis=0)

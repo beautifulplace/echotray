@@ -1,0 +1,40 @@
+# EchoTray is distributed to end users via ./install.sh (self-contained install
+# into ~/.local/share/echotray with its own venv) — it is NOT a pip-installed
+# application, so this file deliberately has no build backend. It exists to give
+# Python tooling (pytest, ruff) a single, versioned configuration point and to
+# record the dev/test extra for contributors.
+[project]
+name = "echotray"
+version = "2.3.2"
+description = "Local offline speech-to-text dictation for Linux (Wayland & X11). Click the tray mic, speak, and the transcript is pasted at your cursor."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["dictation", "whisper", "speech-to-text", "offline", "linux", "tray"]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.optional-dependencies]
+# For running the offline test suite: `pip install -e ".[dev]"` (or use a venv
+# as ./install.sh does). pytest>=7 is required for the `pythonpath` ini option.
+dev = [
+    "pytest>=7",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

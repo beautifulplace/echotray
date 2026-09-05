@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.3.2] - 2026-09-04
+
+### Added
+- **Offline unit test suite.** 38 tests covering model-cache completeness,
+  download progress/cancellation, config parsing, model load/unload, and
+  transcription. Runs with just the stdlib + pytest (no network, audio, or GPU).
+
+### Fixed
+- **Crash-proof config parsing.** A malformed `.env` value (e.g. a non-numeric
+  `SAMPLE_RATE`) no longer crashes the app at import. A new `env_int` helper
+  warns and falls back to the default, and clamps clearly-broken values.
+- **Stale `.part` cleanup on cancel.** Cancelling a model download now removes
+  the partial `.part` file instead of leaving it in the cache directory.
+
+### Changed
+- **Lazy heavy imports.** `numpy`, `sounddevice`, and `faster-whisper` now
+  import inside the functions that use them, so importing the module stays
+  stdlib-only and instant.
+
 ## [2.3.1] - 2026-09-04
 
 ### Changed

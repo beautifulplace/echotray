@@ -13,7 +13,7 @@ echotray-helperd daemon. The GUI runs as an unprivileged user with no special
 groups and talks to the daemon over /run/echotray.sock.
 """
 
-__version__ = "2.3.1"
+__version__ = "2.3.2"
 
 import os
 import pathlib
@@ -110,7 +110,7 @@ _LOG_PATH = pathlib.Path(os.getenv("WHISPER_LOG", "/tmp/echotray.log"))
 
 # ── Configuration (from .env) ─────────────────────────────────────────────────
 
-PASTE_DELAY_MS = int(os.getenv("PASTE_DELAY_MS", "100"))
+PASTE_DELAY_MS = whisper.env_int("PASTE_DELAY_MS", 100)
 
 # Custom colored tray icons (SVG in assets/) - far more visible than the grey
 # GNOME symbolic icons, and color-coded by state:
