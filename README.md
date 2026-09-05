@@ -198,6 +198,13 @@ command instead of the Update button, and the CLI stops with a clear message if
 you run `echotray upgrade` without `--sudo`. After a command-line upgrade, a
 running EchoTray instance is restarted automatically.
 
+> **Note:** use `echotray upgrade --sudo`, not `sudo echotray upgrade`. Running
+> the whole command under `sudo` resets `$HOME` to `/root`, so the app would be
+> installed into `/root/.local/share/echotray` (root's home) instead of your
+> own `~/.local/share/echotray`, and you wouldn't be able to run it as your
+> normal user. The `--sudo` flag installs as your user and only elevates the
+> root-only steps (the helper daemon and system packages).
+
 ## Tray Icon Menu
 
 Right-clicking the tray icon opens a menu with:
