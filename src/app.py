@@ -177,9 +177,8 @@ def show_error_dialog(message):
 # A small set of control-level rules (rounded, padded buttons and entries) that
 # apply on top of whatever system theme is active. We deliberately do NOT set
 # window/background/foreground colors, so the app follows the user's light or
-# dark system theme. Borders on Gtk.Box are unreliable in GTK3 (themes override
-# them), so grouped controls use the cairo-drawn _RoundedFrame instead of CSS
-# borders.
+# dark system theme. Grouped controls use Gtk.ListBox panels (theme background,
+# no border) to match the About window.
 _THEME_CSS = b"""
 button {
     background-image: none;
@@ -245,55 +244,6 @@ def _acquire_single_instance() -> bool:
 
 
 # ── Setup window (non-modal, single Whisper Model section) ───────────────────
-
-class _RoundedFrame(Gtk.Bin):
-    """A container that draws its own rounded border with cairo.
-
-    Theme CSS borders on Gtk.Frame are unreliable (themes override them), so we
-    draw the border directly. This gives exact, theme-independent control over
-    wall thickness and corner radius.
-    """
-
-    def __init__(self, border_width=5, radius=12, pad=10):
-        super().__init__()
-        self._border_width = border_width
-        self._radius = radius
-        self._pad = pad
-        self.set_margin_top(6)
-        self.set_margin_bottom(6)
-        self.connect("draw", self._draw)
-
-    def _rounded_path(self, cr, x0, y0, w, h):
-        r = self._radius
-        if r <= 0:
-            # Square corners: a plain rectangle (matches the About window's
-            # ListBox rows, which have no rounded edges).
-            cr.rectangle(x0, y0, w, h)
-            return
-        x1, y1 = x0 + w, y0 + h
-        cr.arc(x1 - r, y0 + r, r, -3.14159 / 2, 0)
-        cr.arc(x1 - r, y1 - r, r, 0, 3.14159 / 2)
-        cr.arc(x0 + r, y1 - r, r, 3.14159 / 2, 3.14159)
-        cr.arc(x0 + r, y0 + r, r, 3.14159, 3 * 3.14159 / 2)
-        cr.close_path()
-
-    def _draw(self, _widget, cr):
-        alloc = self.get_allocation()
-        # Inset by half the border width so the stroke isn't clipped at the edge.
-        bw = self._border_width
-        pad = bw / 2.0
-        w = alloc.width - bw
-        h = alloc.height - bw
-        self._rounded_path(cr, pad, pad, w, h)
-        # Subtle fill so the group reads as a panel.
-        cr.set_source_rgba(0.5, 0.5, 0.5, 0.05)
-        cr.fill_preserve()
-        # The visible border (drawn after the fill, on the same path).
-        cr.set_source_rgb(0.55, 0.57, 0.60)
-        cr.set_line_width(self._border_width)
-        cr.stroke()
-        return False  # let children draw on top
-
 
 class _StatusLight(Gtk.DrawingArea):
     """A small filled circle that is red (no model) or green (model loaded)."""
