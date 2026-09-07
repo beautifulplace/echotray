@@ -573,6 +573,42 @@ def test_friendly_download_error_generic():
     assert "failed" in msg
 
 
+# ── transparent huge pages opt-out ────────────────────────────────────────────
+
+def test_disable_thp_for_process_returns_bool():
+    """The THP opt-out reports success/failure as a bool and never raises.
+
+    On Linux with glibc the prctl call succeeds (returns True); on platforms
+    without prctl it must return False instead of raising.
+    """
+    result = whisper.disable_thp_for_process()
+    assert isinstance(result, bool)
+
+
+def test_disable_thp_graceful_when_libc_unavailable(monkeypatch):
+    """If ctypes can't load libc at all, the opt-out degrades to False."""
+    import ctypes
+
+    class _Boom:
+        def __init__(self, *args, **kwargs):
+            raise OSError("no libc")
+
+    monkeypatch.setattr(ctypes, "CDLL", _Boom)
+    assert whisper.disable_thp_for_process() is False
+
+
+def test_disable_thp_graceful_when_prctl_refuses(monkeypatch):
+    """If prctl errors (e.g. unsupported constant), the opt-out returns False."""
+    import ctypes
+
+    class _FakeLibc:
+        def prctl(self, *args):
+            raise OSError("EINVAL")
+
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: _FakeLibc())
+    assert whisper.disable_thp_for_process() is False
+
+
 # ── AudioRecorder (needs numpy for the array paths) ──────────────────────────
 
 def test_audio_recorder_stop_empty_returns_empty_array(tmp_path, monkeypatch):

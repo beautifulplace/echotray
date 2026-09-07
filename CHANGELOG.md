@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.4.2] - 2026-09-07
+
+### Fixed
+- **Idle memory creep / high RSS on THP=always hosts.** On hosts running
+  transparent huge pages in `always` mode (common distro default), khugepaged
+  promoted the app's sparse anonymous regions (model weights + CTranslate2's
+  per-core scratch arenas) to 2 MB pages in the background. RSS crept upward
+  while idle (measured: ~400 -> ~684 MB on a 22-thread Intel host) and
+  plateaued higher the more cores the host had, which made the app appear to
+  use ~2x more memory on Intel machines than on Ryzen ones. The app now opts
+  itself out of THP at startup via prctl(PR_SET_THP_DISABLE) - per-process,
+  no root, no system setting, no effect on other apps. Measured on the same
+  host: ~150 MB at start, plateau ~209 MB after dictation, no
+  transcription-speed penalty.
+
 ## [2.4.1] - 2026-09-07
 
 ### Fixed
