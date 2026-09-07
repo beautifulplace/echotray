@@ -1825,6 +1825,11 @@ def _enable_log_file():
 
 def main():
     _enable_log_file()
+    # Before anything allocates: opt out of THP so khugepaged can't inflate
+    # RSS (see whisper.disable_thp_for_process for the full story).
+    if whisper.disable_thp_for_process():
+        if DEBUG_LOG:
+            print("[THP] opted out of transparent huge pages")
     signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
