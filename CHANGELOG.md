@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.4.1] - 2026-09-07
+
+### Fixed
+- **Error notifications no longer pile up in the notification center.** Error
+  notifications (clipboard, paste, transcription, recording, model load,
+  upgrade, restart) were sent with `critical` urgency, which GNOME Shell never
+  auto-dismisses. These are all recoverable errors, so they now use `normal`
+  urgency and auto-dismiss after a few seconds like the routine notifications.
+- **Setup toggle no longer bounces while a model loads.** Flipping the load
+  toggle ON snapped back OFF mid-load (the 500ms poll corrected it because the
+  model wasn't on the app yet), then flipped ON again when loading finished.
+  The toggle now stays frozen in the position the user left it, greyed out,
+  while a load or download+auto-load is in flight, and unfreezes once the
+  model is actually loaded (or the load fails).
+
+### Changed
+- **Quieter log.** The verbose diagnostic lines (`[RSS]`, `[ICON] poll
+  re-assert`, `[STATE]`) are now gated behind `ECHOTRAY_DEBUG=true` in `.env`.
+  Off by default; enable only when diagnosing a state/icon/memory bug.
+- **Setup window wording.** The model status line now reads "Model loaded:
+  Small" instead of "Loaded: small". Model sizes are shown with a capitalized
+  first letter.
+- **Default model is now base.** Fresh installs with no MODEL_SIZE configured
+  download the base model (~148MB) instead of small (~486MB) - faster first
+  run, lower memory. Existing .env files keep their configured size, and
+  startup still auto-loads whatever model is already cached.
+
 ## [2.4.0] - 2026-09-05
 
 ### Added

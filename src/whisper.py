@@ -29,7 +29,7 @@ _TRANSCRIBE_LOCK = threading.Lock()
 
 # ── Configuration (from .env) ─────────────────────────────────────────────────
 
-MODEL_SIZE = os.getenv("MODEL_SIZE", "small")
+MODEL_SIZE = os.getenv("MODEL_SIZE", "base")
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "int8")
 LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en") or None  # empty string → None = auto-detect
 
