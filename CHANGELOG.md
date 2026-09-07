@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.3] - 2026-09-07
+
+### Fixed
+- **Model load/unload ratchet (memory crept up with every model switch).**
+  glibc raises its mmap threshold each time a large mmap'd allocation is
+  freed (capped at 32MB). Whisper model tensors are exactly those
+  allocations, so after one load/unload cycle the raised threshold made the
+  next load's tensors come from the main heap instead of mmap, and freed
+  heap blocks became interior free-list holes that malloc_trim(0) (top of
+  heap only) cannot return. Each Setup-window load/unload cycle then
+  permanently retained a bit more memory, walking RSS upward - most visible
+  on aarch64. The app now pins M_MMAP_THRESHOLD/M_TRIM_THRESHOLD at startup
+  (mallopt), which disables the dynamic adjustment: large allocations stay
+  mmap'd and free() returns them to the OS immediately. Verified on
+  aarch64: load peaks ratcheted 183 -> 213 -> 218 MB across three cycles
+  before the fix; flat 176/176/176 after.
+
 ## [2.4.2] - 2026-09-07
 
 ### Fixed

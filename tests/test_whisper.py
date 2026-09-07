@@ -609,6 +609,27 @@ def test_disable_thp_graceful_when_prctl_refuses(monkeypatch):
     assert whisper.disable_thp_for_process() is False
 
 
+def test_pin_malloc_thresholds_returns_bool():
+    """The malloc-threshold pin reports success/failure as a bool.
+
+    On Linux with glibc both mallopt calls succeed (True); on platforms
+    without mallopt it must return False instead of raising.
+    """
+    assert isinstance(whisper.pin_malloc_thresholds(), bool)
+
+
+def test_pin_malloc_thresholds_graceful_when_libc_unavailable(monkeypatch):
+    """If ctypes can't load libc at all, the pin degrades to False."""
+    import ctypes
+
+    class _Boom:
+        def __init__(self, *args, **kwargs):
+            raise OSError("no libc")
+
+    monkeypatch.setattr(ctypes, "CDLL", _Boom)
+    assert whisper.pin_malloc_thresholds() is False
+
+
 # ── AudioRecorder (needs numpy for the array paths) ──────────────────────────
 
 def test_audio_recorder_stop_empty_returns_empty_array(tmp_path, monkeypatch):
