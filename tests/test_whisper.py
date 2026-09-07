@@ -54,7 +54,7 @@ def test_defaults_used_when_env_absent(monkeypatch):
     assert m.CHANNELS == 1
     assert m.MAX_RECORDING_SECONDS == 300
     assert m.CPU_THREADS == 4
-    assert m.MODEL_SIZE == "small"
+    assert m.MODEL_SIZE == "base"
     assert m.LANGUAGE == "en"
 
 
@@ -469,9 +469,9 @@ def test_load_model_uses_size_name_when_not_cached(tmp_path, monkeypatch, fake_f
 
 def test_load_model_defaults_size_to_configured(tmp_path, monkeypatch, fake_fw):
     monkeypatch.setattr(whisper, "MODEL_CACHE_ROOT", str(tmp_path))
-    whisper.load_model()  # size=None → MODEL_SIZE default ("small")
+    whisper.load_model()  # size=None → MODEL_SIZE default ("base")
     args, _kwargs = _RecorderWhisper.calls[0]
-    assert args[0] == "small"
+    assert args[0] == "base"
 
 
 def test_load_model_coerces_float16_to_int8(tmp_path, monkeypatch, fake_fw, capsys):

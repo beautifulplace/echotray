@@ -6,5 +6,5 @@ the GTK bindings). The Gitea build points at Gitea (5.x line), the GitHub build
 at GitHub (2.x line) — each build checks its own version line.
 """
 
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 REPO_URL = "https://github.com/beautifulplace/echotray"

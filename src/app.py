@@ -54,6 +54,8 @@ def _flush_memory():
 
 def _log_rss(label=""):
     """Print current RSS in kB if /proc/self/status is readable."""
+    if not DEBUG_LOG:
+        return
     try:
         with open("/proc/self/status", "r") as f:
             for line in f:
@@ -117,6 +119,11 @@ NOTIFY_ON_RECORDING    = os.getenv("NOTIFY_ON_RECORDING",    "true").lower() == 
 NOTIFY_ON_DONE         = os.getenv("NOTIFY_ON_DONE",         "true").lower() == "true"
 NOTIFY_ON_SKIPPED      = os.getenv("NOTIFY_ON_SKIPPED",      "true").lower() == "true"
 NOTIFY_VERBOSE         = os.getenv("NOTIFY_VERBOSE",         "false").lower() == "true"
+
+# Debug logging toggle. When true, verbose diagnostic lines ([RSS], [ICON],
+# [STATE]) are written to the log. Off by default so the log stays readable
+# during normal use; enable it only when diagnosing a state/icon/memory bug.
+DEBUG_LOG              = os.getenv("ECHOTRAY_DEBUG",         "false").lower() == "true"
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -485,7 +492,7 @@ class AboutWindow(Gtk.Window):
                 self._do_upgrade(version)
             except Exception as e:
                 GLib.idle_add(notify, "EchoTray",
-                              f"Upgrade failed: {e}", "audio-input-microphone", "critical")
+                              f"Upgrade failed: {e}", "audio-input-microphone", "normal")
                 GLib.idle_add(self._upgrade_failed)
                 return
             GLib.idle_add(self._upgrade_done)
@@ -534,7 +541,7 @@ class AboutWindow(Gtk.Window):
                 )
         except Exception as e:
             print(f"[ERROR] Restart failed: {e}")
-            notify("EchoTray", f"Restart failed: {e}", "audio-input-microphone", "critical")
+            notify("EchoTray", f"Restart failed: {e}", "audio-input-microphone", "normal")
             return
         # Quit the current instance.
         self.app._on_quit(None)
@@ -908,7 +915,7 @@ class SetupWindow(Gtk.Window):
         # ── Whisper Model box ─────────────────────────────────────────────────
         sec, body = self._section("Whisper Model")
 
-        # Line 1: status light + "Loaded: <model>" (or "Select model"), with a
+        # Line 1: status light + "Model loaded: <model>" (or "Select model"), with a
         # load/unload toggle at the far end.
         self.model_light = _StatusLight()
         self.model_label = Gtk.Label(label="Select model")
@@ -1090,6 +1097,10 @@ class SetupWindow(Gtk.Window):
                 self.app._start_model_load(size)
             else:
                 self.app._start_model_download(size)
+            # Freeze the toggle immediately (the poll does this too, but its
+            # next tick is up to 500ms away) so a second click can't slip in
+            # before the poll freezes it.
+            self.load_toggle.set_sensitive(False)
         else:
             # Unload the currently loaded model and drop to disabled.
             if self.app.model is not None:
@@ -1224,7 +1235,7 @@ class SetupWindow(Gtk.Window):
             self.delete_btn.set_label("Delete")
             self.delete_btn.set_sensitive(is_downloaded)
 
-        # The green light, "Loaded: <model>" label, and load toggle all reflect
+        # The green light, "Model loaded: <model>" label, and load toggle all reflect
         # whether a model is actually LOADED into memory (self.app.model), NOT
         # merely downloaded. A model can be downloaded but still loading (or
         # failed to load), in which case the tray icon is grey and these
@@ -1232,19 +1243,30 @@ class SetupWindow(Gtk.Window):
         loaded = self.app.model is not None
         self.model_light.set_ok(loaded)
         if loaded:
-            self.model_label.set_text(f"Loaded: {self.app.loaded_model_size or '?'}")
+            self.model_label.set_text(f"Model loaded: {(self.app.loaded_model_size or '?').capitalize()}")
         else:
             self.model_label.set_text("Select model")
         # The toggle loads/unloads the selected size. It's greyed out when the
         # selected size isn't downloaded AND nothing is loaded (nothing to load,
         # nothing to unload). When a model is loaded it stays active so the user
         # can always unload it.
-        self.load_toggle.set_sensitive(is_downloaded or loaded)
-        # Sync the toggle to the loaded state without re-triggering the handler.
-        if self.load_toggle.get_active() != loaded:
-            self.load_toggle.handler_block_by_func(self._on_load_toggle)
-            self.load_toggle.set_active(loaded)
-            self.load_toggle.handler_unblock_by_func(self._on_load_toggle)
+        # While a load/download of the SELECTED size is in flight, freeze the
+        # toggle in the position the user left it and grey it out: the model
+        # only becomes real on the app seconds later (background thread), so
+        # forcing active to match `loaded` mid-flight would snap the switch OFF
+        # and then back ON when the load finished - the visible "bounce".
+        in_flight = self.app._load_progress["active"] or (
+            downloading_this and not is_downloaded
+        )
+        if in_flight:
+            self.load_toggle.set_sensitive(False)
+        else:
+            self.load_toggle.set_sensitive(is_downloaded or loaded)
+            # Sync the toggle to the loaded state without re-triggering the handler.
+            if self.load_toggle.get_active() != loaded:
+                self.load_toggle.handler_block_by_func(self._on_load_toggle)
+                self.load_toggle.set_active(loaded)
+                self.load_toggle.handler_unblock_by_func(self._on_load_toggle)
 
         return True  # keep polling
 
@@ -1286,7 +1308,7 @@ def paste_text(text):
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         print(f"[ERROR] {tool[0]}: {e}")
         body = f"{tool[0]} failed: {e}" if NOTIFY_VERBOSE else "Clipboard copy failed - check terminal for details."
-        notify("Error", body, urgency="critical")
+        notify("Error", body, urgency="normal")
         return
 
     # Step 2: Small delay so clipboard is ready
@@ -1298,7 +1320,7 @@ def paste_text(text):
     except helper_client.HelperError as e:
         print(f"[ERROR] paste request: {e}")
         body = f"Paste failed: {e}\nText copied to clipboard - paste manually." if NOTIFY_VERBOSE else "Paste failed - text is on clipboard, paste manually."
-        notify("Error", body, urgency="critical")
+        notify("Error", body, urgency="normal")
 
 
 # ── Transcription Orchestration ───────────────────────────────────────────────
@@ -1325,7 +1347,7 @@ def transcribe_and_paste(model, audio_data, app):
     except Exception as e:
         print(f"[ERROR] Transcription: {e}")
         body = f"Transcription failed: {e}" if NOTIFY_VERBOSE else "Transcription failed - check terminal for details."
-        notify("Error", body, urgency="critical")
+        notify("Error", body, urgency="normal")
         audio_data[:] = 0
         del audio_data
         _reclaim()
@@ -1510,11 +1532,16 @@ class DictationApp:
                     if self.model is not None:
                         print(f"Model '{size}' downloaded; keeping current model loaded.")
                         return
+                    # Raise the load-in-flight flag so the setup toggle stays
+                    # frozen through the auto-load phase (same anti-bounce
+                    # guarantee as _start_model_load); _activate_model lowers it.
+                    self._load_progress["active"] = True
                     try:
                         model = whisper.load_model(size)
                     except Exception as e:  # noqa: BLE001
                         print(f"[ERROR] Model load failed: {e}")
-                        GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
+                        self._load_progress["active"] = False
+                        GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "normal")
                         return
                     GLib.idle_add(self._activate_model, model, size)
                 elif self._download_result["error"] == "cancelled":
@@ -1523,7 +1550,7 @@ class DictationApp:
                     err = self._download_result["error"]
                     msg = whisper.friendly_download_error(err)
                     print(f"[ERROR] Model download failed: {err}")
-                    GLib.idle_add(notify, "EchoTray", msg, "audio-input-microphone", "critical")
+                    GLib.idle_add(notify, "EchoTray", msg, "audio-input-microphone", "normal")
 
         self._download_thread = threading.Thread(target=_job, daemon=True)
         self._download_thread.start()
@@ -1554,10 +1581,12 @@ class DictationApp:
                 model = whisper.load_model(size)
             except Exception as e:  # noqa: BLE001
                 print(f"[ERROR] Model load failed: {e}")
-                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
-                return
-            finally:
+                # Lower the in-flight flag or the setup toggle stays frozen.
                 self._load_progress["active"] = False
+                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "normal")
+                return
+            # Keep the flag up until _activate_model lands the model on the
+            # app (main thread) - the poll then syncs the toggle in one step.
             GLib.idle_add(self._activate_model, model, size)
 
         self._load_thread = threading.Thread(target=_job, daemon=True)
@@ -1567,6 +1596,10 @@ class DictationApp:
         """Set the loaded model on the app and flip it to ready (main thread)."""
         self.model = model
         self.loaded_model_size = size
+        # Drop the in-flight flag AFTER the model is on the app, in the same
+        # main-thread step: the setup poll then sees loaded=True with no
+        # gap where the flag is down but the model isn't set yet.
+        self._load_progress["active"] = False
         self.set_ready()
         _flush_memory()
         _log_rss("after model load")
@@ -1598,7 +1631,8 @@ class DictationApp:
 
     def set_idle(self):
         self.state = "IDLE"
-        print(f"[STATE] idle (icon={ICON_IDLE})")
+        if DEBUG_LOG:
+            print(f"[STATE] idle (icon={ICON_IDLE})")
         # Settle on green after a short delay. A no-speech stop fires amber ->
         # green in ~0ms, and the GNOME AppIndicator extension debounces icon
         # changes over a 30ms window, collapsing the rapid transition and
@@ -1622,7 +1656,8 @@ class DictationApp:
 
     def set_recording(self):
         self.state = "RECORDING"
-        print(f"[STATE] recording (icon={ICON_RECORDING})")
+        if DEBUG_LOG:
+            print(f"[STATE] recording (icon={ICON_RECORDING})")
         self.indicator.set_icon_full(ICON_RECORDING, "Recording")
         self._last_icon = ICON_RECORDING
         self.status_item.set_label("Status: Recording...")
@@ -1633,7 +1668,8 @@ class DictationApp:
 
     def set_transcribing(self):
         self.state = "TRANSCRIBING"
-        print(f"[STATE] transcribing (icon={ICON_PROCESSING})")
+        if DEBUG_LOG:
+            print(f"[STATE] transcribing (icon={ICON_PROCESSING})")
         self.indicator.set_icon_full(ICON_PROCESSING, "Transcribing")
         self._last_icon = ICON_PROCESSING
         self.status_item.set_label("Status: Transcribing...")
@@ -1698,7 +1734,7 @@ class DictationApp:
                 self.recorder = None
                 self.set_idle()
                 body = f"Could not start recording: {e}" if NOTIFY_VERBOSE else "Could not start recording - check terminal for details."
-                notify("Error", body, urgency="critical")
+                notify("Error", body, urgency="normal")
         elif self.state == "RECORDING":
             if self._recording_timeout_id is not None:
                 GLib.source_remove(self._recording_timeout_id)
@@ -1756,7 +1792,8 @@ class DictationApp:
         else:
             want = None
         if want is not None and want != self._last_icon:
-            print(f"[ICON] poll re-assert: state={self.state} want={want}")
+            if DEBUG_LOG:
+                print(f"[ICON] poll re-assert: state={self.state} want={want}")
             self.indicator.set_icon_full(want, "Recording" if want == ICON_RECORDING else ("Transcribing" if want == ICON_PROCESSING else ("Waiting for model" if want == ICON_DISABLED else "Idle")))
             self._last_icon = want
         return True  # keep the timer running
@@ -1834,7 +1871,7 @@ def main():
                 model = whisper.load_model(size)
             except Exception as e:
                 print(f"[ERROR] Model load failed: {e}")
-                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "critical")
+                GLib.idle_add(notify, "EchoTray", f"Model load failed: {e}", "audio-input-microphone", "normal")
                 return
             GLib.idle_add(app._activate_model, model, size)
         threading.Thread(target=_load, daemon=True).start()

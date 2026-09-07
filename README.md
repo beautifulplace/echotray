@@ -3,7 +3,7 @@
 Local speech-to-text dictation for Linux (Wayland and X11). Click the tray microphone to
 start recording, click again to stop - the transcript is pasted at your cursor.
 
-[![version](https://img.shields.io/badge/version-2.4.0-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
+[![version](https://img.shields.io/badge/version-2.4.1-blue)](CHANGELOG.md) [![python](https://img.shields.io/badge/language-python-blue)] [![license](https://img.shields.io/badge/license-MIT-blue)]
 
 **Fully self-contained and offline.** The Whisper model is downloaded on first run
 and cached locally. No external LLM, no cloud service, no GPU required - it runs on
@@ -146,6 +146,12 @@ nano ~/.local/share/echotray/.env
 | `WHISPER_LANGUAGE` | `en` | Language code, or empty for auto-detect |
 | `PASTE_DELAY_MS` | `100` | Delay between clipboard copy and Ctrl+V (increase if paste is blank) |
 | `MODEL_DIR` | `~/.local/share/echotray/models` | Where the Whisper model is stored |
+| `NOTIFY_ON_READY` | `true` | Show a notification when the model is loaded and ready |
+| `NOTIFY_ON_RECORDING` | `true` | Show a notification when recording starts |
+| `NOTIFY_ON_DONE` | `true` | Show a "Transcribed: N words" notification after each dictation |
+| `NOTIFY_ON_SKIPPED` | `true` | Show a notification when a recording is too short / has no speech |
+| `NOTIFY_VERBOSE` | `false` | Show the full error text in error notifications (instead of "check terminal for details") |
+| `ECHOTRAY_DEBUG` | `false` | Write verbose diagnostic lines (`[RSS]`, `[ICON]`, `[STATE]`) to the log; enable only when diagnosing a bug |
 
 ## Usage
 
