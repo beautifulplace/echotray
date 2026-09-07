@@ -1825,8 +1825,13 @@ def _enable_log_file():
 
 def main():
     _enable_log_file()
-    # Before anything allocates: opt out of THP so khugepaged can't inflate
-    # RSS (see whisper.disable_thp_for_process for the full story).
+    # Before anything allocates: pin glibc's malloc thresholds so the model
+    # load/unload ratchet can't start (see whisper.pin_malloc_thresholds),
+    # then opt out of THP so khugepaged can't inflate RSS
+    # (see whisper.disable_thp_for_process for the full story).
+    if whisper.pin_malloc_thresholds():
+        if DEBUG_LOG:
+            print("[MALLOC] pinned mmap/trim thresholds")
     if whisper.disable_thp_for_process():
         if DEBUG_LOG:
             print("[THP] opted out of transparent huge pages")

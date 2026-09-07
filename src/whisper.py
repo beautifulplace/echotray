@@ -428,6 +428,45 @@ def transcribe_audio(model, audio_data):
 
 # ── Transparent huge pages opt-out ────────────────────────────────────────────
 
+def pin_malloc_thresholds():
+    """Stop glibc's dynamic mmap-threshold ratchet from retaining model memory.
+
+    By default glibc RAISES its mmap threshold every time a large mmap'd
+    allocation is freed (up to 32MB). Whisper model tensors are large
+    allocations: after one load/unload cycle the raised threshold makes the
+    next load's tensors come from the main heap instead of mmap, and freed
+    heap blocks become interior free-list holes that malloc_trim(0) (which
+    only trims the top of the heap) cannot return. Each load/unload cycle
+    then permanently retains a bit more memory - the "ratchet" seen when
+    switching models in the Setup window, where repeated load/unload cycles
+    walk RSS upward on aarch64.
+
+    Pinning M_MMAP_THRESHOLD (and the matching trim threshold) disables the
+    dynamic adjustment: large allocations stay mmap'd and free() returns
+    them to the OS immediately, so unload+malloc_trim actually drops RSS
+    back to baseline. Verified on this Pi (aarch64, ct2 4.8.2/fw 1.2.1,
+    base int8): without the pin, load peaks ratcheted 183 -> 213 -> 218 MB
+    across three load/unload cycles; with it, flat 176/176/176.
+
+    Must run before the first model load to be effective. Best-effort:
+    returns False and changes nothing when mallopt is unavailable.
+
+    Returns True if both thresholds were pinned.
+    """
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        M_TRIM_THRESHOLD = -1
+        M_MMAP_THRESHOLD = -3
+        _ = 131072  # 128 KiB: glibc's original default, before any ratchet
+        ok = libc.mallopt(M_TRIM_THRESHOLD, _) != 0
+        ok = libc.mallopt(M_MMAP_THRESHOLD, _) != 0 and ok
+    except Exception:
+        return False
+    return ok
+
+
 def disable_thp_for_process():
     """Opt this process out of transparent huge pages (THP).
 
