@@ -54,9 +54,8 @@ def cmd_upgrade(use_sudo):
 
     # `--sudo` means "do a full privileged install". If there's a newer version,
     # install it; if already up to date, reinstall the current version so the
-    # helper daemon and system packages can be repaired (e.g. a missing socket
-    # unit after a failed migration). Without --sudo, only act when there is
-    # something newer.
+    # helper daemon and system packages can be repaired. Without --sudo, only
+    # act when there is something newer.
     if latest is None and not use_sudo:
         print("EchoTray is up to date (" + __version__ + ").")
         return 0
@@ -122,7 +121,7 @@ def cmd_uninstall():
     """Remove EchoTray completely (app, helper daemon, socket, launcher, icons).
 
     Runs the bundled uninstall.sh from the install dir. It stops the running
-    GUI, removes the helper daemon + socket unit (sudo), and removes the app,
+    GUI, removes the helper daemon + its socket (sudo), and removes the app,
     launcher, and icons. Prompts whether to keep the downloaded model.
     """
     import pathlib

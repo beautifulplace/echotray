@@ -171,7 +171,8 @@ echo "  Installed: $DESKTOP_FILE"
 
 # Install the icon into the user's hicolor theme under the name "echotray".
 # Process lists (GNOME System Monitor) look icons up BY PROCESS NAME; the app
-# reports itself as "echotray" since 5.6.8, so this makes those tools show the
+# reports itself as "echotray" since the desktop-identity change, so this makes
+# those tools show the
 # EchoTray mic instead of the interpreter's icon. The helper daemon is a Rust
 # binary already named "echotray-helperd", so it only needs the matching icon.
 ICON_THEME_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"

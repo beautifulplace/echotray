@@ -134,8 +134,14 @@ def _fake_release_response(monkeypatch, body):
 
 
 def test_update_requires_sudo_true(monkeypatch):
-    _fake_release_response(monkeypatch, "Fixes the helper daemon.\n\n[requires-sudo]\n")
-    assert updater.update_requires_sudo("v5.4.5") is True
+    # A [requires-sudo] release that ships a newer daemon (via [helper-min])
+    # than the one installed -> sudo.
+    _fake_release_response(
+        monkeypatch,
+        "Fixes the helper daemon.\n\n[requires-sudo]\n[helper-min 3.4.0]\n",
+    )
+    monkeypatch.setattr(updater, "helper_version", lambda: "3.3.0")
+    assert updater.update_requires_sudo("v2.5.1") is True
 
 
 def test_update_requires_sudo_false(monkeypatch):
@@ -168,6 +174,46 @@ def test_update_requires_sudo_network_error(monkeypatch):
     # Fail closed: a privileged release misread as unprivileged would skip the
     # helper daemon and silently break paste, so err toward requiring sudo.
     assert updater.update_requires_sudo("v5.4.5") is True
+
+
+# ── update_requires_sudo: installed-state refinement ──────────────────────────
+
+def test_requires_sudo_no_helper_min(monkeypatch):
+    # A [requires-sudo] release with no [helper-min] marker -> no sudo needed
+    # (the daemon is already current). This is the over-broad-flag fix.
+    _fake_release_response(monkeypatch, "Daemon release.\n\n[requires-sudo]\n")
+    assert updater.update_requires_sudo("v2.5.1") is False
+
+
+def test_requires_sudo_helper_min_older_installed(monkeypatch):
+    # [helper-min 3.5.0] with an installed 3.2.0 daemon -> sudo (real bump).
+    _fake_release_response(
+        monkeypatch,
+        "Daemon bump.\n\n[requires-sudo]\n[helper-min 3.5.0]\n",
+    )
+    monkeypatch.setattr(updater, "helper_version", lambda: "3.2.0")
+    assert updater.update_requires_sudo("v2.5.1") is True
+
+
+def test_requires_sudo_helper_min_current_installed(monkeypatch):
+    # [helper-min 3.5.0] with an installed 3.5.0 daemon -> no sudo.
+    _fake_release_response(
+        monkeypatch,
+        "Daemon bump.\n\n[requires-sudo]\n[helper-min 3.5.0]\n",
+    )
+    monkeypatch.setattr(updater, "helper_version", lambda: "3.5.0")
+    assert updater.update_requires_sudo("v2.5.1") is False
+
+
+def test_requires_sudo_helper_min_unknown_installed(monkeypatch):
+    # [helper-min 3.5.0] but the installed version can't be determined -> fail
+    # closed (sudo).
+    _fake_release_response(
+        monkeypatch,
+        "Daemon bump.\n\n[requires-sudo]\n[helper-min 3.5.0]\n",
+    )
+    monkeypatch.setattr(updater, "helper_version", lambda: None)
+    assert updater.update_requires_sudo("v2.5.1") is True
 
 
 # ── wrapper_path ──────────────────────────────────────────────────────────────

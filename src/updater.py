@@ -269,18 +269,57 @@ def latest_available_version():
     return latest
 
 
+def helper_version():
+    """Return the installed helper daemon's version string, or None.
+
+    Runs the daemon binary with --version and parses the result. Returns None
+    if the binary is missing or can't be run (callers treat None as "unknown"
+    and fail closed).
+    """
+    import subprocess
+    bin_path = "/usr/local/lib/echotray/echotray-helperd"
+    try:
+        out = subprocess.run(
+            [bin_path, "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    parts = out.stdout.strip().split()
+    return parts[-1] if parts else None
+
+
+def _helper_min_from_body(lines):
+    """Parse a `[helper-min X.Y.Z]` marker from release-note lines, or None."""
+    for line in lines:
+        s = line.strip()
+        if s.startswith("[helper-min ") and s.endswith("]"):
+            return s[len("[helper-min "):-1].strip()
+    return None
+
+
 def update_requires_sudo(version):
     """Return True if the release for `version` needs a privileged install.
 
     A release is marked privileged by a line containing exactly the token
-    `[requires-sudo]` (on its own line) in its release notes. The maintainer
-    sets this when a release changes the helper daemon or adds system packages
-    (the two things that need root). The token is matched as a standalone line
-    so it can't be triggered by prose that merely mentions the marker. If the
-    release notes can't be read, we conservatively return True (fail closed):
-    a privileged release that is misread as unprivileged would skip the helper
-    daemon and silently break paste, whereas a false "requires sudo" only
-    shows the user a harmless `echotray upgrade --sudo` command.
+    `[requires-sudo]` (on its own line) in its release notes. The token is
+    matched as a standalone line so it can't be triggered by prose that merely
+    mentions the marker.
+
+    When the marker is present, the decision is refined against the INSTALLED
+    state so a machine that already has the required daemon isn't asked for
+    sudo unnecessarily:
+
+    - If the release carries a `[helper-min X.Y.Z]` marker and the installed
+      daemon is older than X -> sudo (a real daemon bump).
+    - Otherwise the daemon is already current -> no sudo.
+
+    If the release notes can't be read, we conservatively return True (fail
+    closed): a privileged release that is misread as unprivileged would skip
+    the helper daemon and silently break paste, whereas a false "requires
+    sudo" only shows the user a harmless `echotray upgrade --sudo` command.
     """
     import json
     import urllib.error
@@ -301,9 +340,21 @@ def update_requires_sudo(version):
         print(f"[update] could not read release notes for {version}: {e}", file=sys.stderr)
         return True
     body = rel.get("body") or ""
-    for line in body.splitlines():
-        if line.strip() == "[requires-sudo]":
-            return True
+    lines = body.splitlines()
+    if not any(line.strip() == "[requires-sudo]" for line in lines):
+        return False
+
+    # The release touches the daemon. Refine against installed state: sudo is
+    # required only if the release ships a newer daemon than the one installed
+    # (via a [helper-min X.Y.Z] marker). Otherwise the daemon is already
+    # current -> no sudo.
+    helper_min = _helper_min_from_body(lines)
+    if helper_min is not None:
+        installed = helper_version()
+        if installed is None:
+            return True  # can't determine the installed version -> fail closed
+        if version_newer(helper_min, installed):
+            return True  # the release ships a newer daemon than installed
     return False
 
 

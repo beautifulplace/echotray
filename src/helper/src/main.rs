@@ -391,6 +391,14 @@ fn handle_client(cfd: RawFd, uinput: &Option<UInput>, buf: &mut Vec<u8>) -> bool
 // ─────────────────────────── main ────────────────────────────────────────────
 
 fn main() {
+    // `--version` prints the daemon version and exits, so the updater can
+    // compare the installed daemon against the version a release ships.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("echotray-helperd {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let listen_fd = match open_listen_socket() {
         Ok(fd) => fd,
         Err(e) => {

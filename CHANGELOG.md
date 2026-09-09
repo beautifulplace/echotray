@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.5.1] - 2026-09-08
+
+### Fixed
+- **`[requires-sudo]` releases no longer ask for sudo when the machine already
+  has the required daemon.** The flag was a single static boolean, so a release
+  that touched the daemon asked everyone for sudo. The updater now refines the
+  decision against the installed state: it asks for sudo only if the release
+  ships a newer daemon than the one installed (via a new `[helper-min X.Y.Z]`
+  release marker). The daemon now supports `--version` so the updater can
+  compare versions.
+
 ## [2.5.0] - 2026-09-08
 
 ### Added
