@@ -277,8 +277,10 @@ def update_requires_sudo(version):
     sets this when a release changes the helper daemon or adds system packages
     (the two things that need root). The token is matched as a standalone line
     so it can't be triggered by prose that merely mentions the marker. If the
-    release notes can't be read, we conservatively return False (the
-    unprivileged path is the safe default).
+    release notes can't be read, we conservatively return True (fail closed):
+    a privileged release that is misread as unprivileged would skip the helper
+    daemon and silently break paste, whereas a false "requires sudo" only
+    shows the user a harmless `echotray upgrade --sudo` command.
     """
     import json
     import urllib.error
@@ -297,7 +299,7 @@ def update_requires_sudo(version):
             rel = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError) as e:
         print(f"[update] could not read release notes for {version}: {e}", file=sys.stderr)
-        return False
+        return True
     body = rel.get("body") or ""
     for line in body.splitlines():
         if line.strip() == "[requires-sudo]":

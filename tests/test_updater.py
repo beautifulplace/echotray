@@ -165,8 +165,9 @@ def test_update_requires_sudo_network_error(monkeypatch):
         raise urllib.error.URLError("no network")
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
-    # Conservatively False on failure (unprivileged path is the safe default).
-    assert updater.update_requires_sudo("v5.4.5") is False
+    # Fail closed: a privileged release misread as unprivileged would skip the
+    # helper daemon and silently break paste, so err toward requiring sudo.
+    assert updater.update_requires_sudo("v5.4.5") is True
 
 
 # ── wrapper_path ──────────────────────────────────────────────────────────────

@@ -68,7 +68,24 @@ def _log_rss(label=""):
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
-from gi.repository import GLib, Gtk, Gdk  # noqa: E402
+# Present the app to the desktop as "echotray" instead of the venv python
+# binary it was launched from. Both steps MUST run before Gtk is imported:
+# GTK snapshots the program name into the Wayland app_id / X11 WM_CLASS at
+# init, and the GLib option parser only fills in a prgname that is unset.
+#   - GLib prgname -> window identity. GNOME Shell matches our windows to
+#     echotray.desktop by it, so the About/Setup windows get the EchoTray
+#     icon and name in the panel/alt-tab instead of a generic gear.
+#   - prctl(PR_SET_NAME) -> /proc/<pid>/comm, so process lists (GNOME System
+#     Monitor, ps) show "echotray" instead of "python".
+from gi.repository import GLib  # noqa: E402
+GLib.set_prgname("echotray")
+if ctypes is not None:
+    try:
+        # 15 = PR_SET_NAME; the kernel caps comm at 15 chars ("echotray" fits).
+        ctypes.CDLL(None).prctl(15, b"echotray", 0, 0, 0)
+    except Exception:
+        pass
+from gi.repository import Gtk, Gdk  # noqa: E402
 from gi.repository import AyatanaAppIndicator3 as appindicator  # noqa: E402
 
 import helper_client
@@ -131,7 +148,7 @@ DEBUG_LOG              = os.getenv("ECHOTRAY_DEBUG",         "false").lower() ==
 def notify(summary, body="", icon="audio-input-microphone", urgency="normal"):
     """Send a desktop notification and print to terminal.
 
-    Notifications are marked transient (hint `int:transient:1`) so the
+    Notifications are marked transient (hint `string:transient:true`) so the
     notification daemon does NOT keep them in the notification tray/center -
     they show briefly and disappear, instead of stacking up to the top of the
     screen. A short timeout (5s) also auto-dismisses them.
@@ -139,7 +156,7 @@ def notify(summary, body="", icon="audio-input-microphone", urgency="normal"):
     print(f"[{summary}] {body}" if body else f"[{summary}]")
     args = [
         "notify-send", "-i", icon, "-u", urgency,
-        "-t", "5000", "-h", "int:transient:1",
+        "-t", "5000", "-h", "string:transient:true",
         summary,
     ]
     if body:

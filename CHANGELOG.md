@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.5.0] - 2026-09-08
+
+### Added
+- **`echotray uninstall` command.** Removes EchoTray completely (app, helper
+  daemon, launcher, icons) by running the bundled uninstall.sh. install.sh now
+  copies uninstall.sh into the install dir so the CLI can find it from the
+  installed copy.
+
+### Fixed
+- **The app now presents itself to the desktop as "echotray".** Windows
+  (About/Setup) and process lists (GNOME System Monitor) previously showed the
+  Python interpreter's name and icon. The app now sets its GLib program name
+  and process name, and installs matching theme icons, so the tray, windows,
+  and process lists all show the EchoTray identity.
+- **Notifications were delayed and stuck in the tray.** The transient hint was
+  `int:transient:1`; the correct form is `string:transient:true`. Notifications
+  now show as a banner and dismiss instead of accumulating in the tray.
+- **The helper daemon now waits for the compositor to register its virtual
+  keyboard before the first keystroke.** A one-time settle delay after device
+  creation covers the brief registration window at startup and after a daemon
+  restart, so the first paste isn't lost.
+
 ## [2.4.3] - 2026-09-07
 
 ### Fixed

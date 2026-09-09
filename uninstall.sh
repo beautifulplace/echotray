@@ -22,9 +22,9 @@ if pgrep -f "echotray/app/src/app.py" >/dev/null 2>&1 || pgrep -f "echotray/src/
     echo "  Stopped running GUI."
 fi
 
-# 2. Stop and remove the helper daemon service (binary + unit file)
-SERVICES=$(systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -E '^echotray-helperd\.service$' || true)
-if [[ -n "$SERVICES" ]] || compgen -G "/etc/systemd/system/echotray-helperd.service" >/dev/null 2>&1; then
+# 2. Stop and remove the helper daemon socket + service (binary + unit files)
+SERVICES=$(systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -E '^echotray-helperd\.(service|socket)$' || true)
+if [[ -n "$SERVICES" ]] || compgen -G "/etc/systemd/system/echotray-helperd.service" >/dev/null 2>&1 || compgen -G "/etc/systemd/system/echotray-helperd.socket" >/dev/null 2>&1; then
     for svc in $SERVICES; do
         echo "  Stopping $svc ..."
         sudo systemctl stop "$svc" 2>/dev/null || true
@@ -32,8 +32,9 @@ if [[ -n "$SERVICES" ]] || compgen -G "/etc/systemd/system/echotray-helperd.serv
         sudo systemctl reset-failed "$svc" 2>/dev/null || true
     done
     sudo rm -f /etc/systemd/system/echotray-helperd.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/echotray-helperd.socket 2>/dev/null || true
     sudo systemctl daemon-reload
-    echo "  Removed helper daemon service."
+    echo "  Removed helper daemon socket + service."
 fi
 # Kill any stray daemon process
 if pgrep -f "echotray-helperd" >/dev/null 2>&1; then
@@ -45,8 +46,10 @@ sudo rm -rf /usr/local/lib/echotray 2>/dev/null || true
 sudo rm -f /run/echotray.sock 2>/dev/null || true
 rm -f /tmp/echotray.lock 2>/dev/null || true
 
-# 4. Remove desktop launcher
+# 4. Remove desktop launcher + hicolor theme icons
 rm -f "$DESKTOP_FILE"
+rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/echotray.svg"
+rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/echotray-helperd.svg"
 command -v update-desktop-database &>/dev/null && \
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
@@ -80,6 +83,8 @@ echo ""
 echo "=== Uninstall complete ==="
 echo "  Removed: desktop launcher, install dir ($INSTALL_DIR),"
 echo "           helper daemon service + binary, socket, lock."
-echo "  Project folder is intact: $SCRIPT_DIR"
-echo "  Run ./install.sh to reinstall."
+echo ""
+echo "  To reinstall, clone the repo and run the installer:"
+echo "    git clone https://github.com/beautifulplace/echotray.git"
+echo "    cd echotray && ./install.sh"
 echo ""

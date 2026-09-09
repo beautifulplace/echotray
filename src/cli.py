@@ -8,6 +8,7 @@ Usage:
     echotray upgrade [--sudo]   check for a newer version and install it
     echotray ignore <version>   hide the update pill for a specific version
     echotray check              print the latest available version (if any)
+    echotray uninstall          remove EchoTray completely
 """
 
 import os
@@ -26,6 +27,7 @@ def _print_usage():
     print("  echotray upgrade [--sudo]   install the latest version")
     print("  echotray ignore <version>   hide the update pill for a version")
     print("  echotray check              show the latest available version")
+    print("  echotray uninstall          remove EchoTray completely")
     print()
 
 
@@ -49,27 +51,39 @@ def cmd_ignore(version):
 
 def cmd_upgrade(use_sudo):
     latest = updater.latest_available_version()
-    if latest is None:
+
+    # `--sudo` means "do a full privileged install". If there's a newer version,
+    # install it; if already up to date, reinstall the current version so the
+    # helper daemon and system packages can be repaired (e.g. a missing socket
+    # unit after a failed migration). Without --sudo, only act when there is
+    # something newer.
+    if latest is None and not use_sudo:
         print("EchoTray is up to date (" + __version__ + ").")
         return 0
 
-    requires_sudo = updater.update_requires_sudo(latest)
+    target = latest if latest is not None else ("v" + __version__)
 
-    # If the release needs a privileged install and the user didn't pass
-    # --sudo, tell them up front (before touching anything) and stop.
-    if requires_sudo and not use_sudo:
-        print(f"EchoTray {latest} requires a privileged install (it changes the "
-              "helper daemon or system packages).")
-        print("Run this instead:")
-        print("  echotray upgrade --sudo")
-        return 1
+    # Only the non-sudo path needs the requires-sudo gate (to warn the user to
+    # add --sudo). The --sudo path is already privileged by definition.
+    if not use_sudo:
+        requires_sudo = updater.update_requires_sudo(target)
+        if requires_sudo:
+            print(f"EchoTray {target} requires a privileged install (it changes the "
+                  "helper daemon or system packages).")
+            print("Run this instead:")
+            print("  echotray upgrade --sudo")
+            return 1
 
-    print(f"Upgrading EchoTray {__version__} -> {latest} ...")
+    if latest is None:
+        print(f"Reinstalling EchoTray {__version__} with a privileged install "
+              "(helper daemon + system packages)...")
+    else:
+        print(f"Upgrading EchoTray {__version__} -> {target} ...")
     try:
         if use_sudo:
             # Full install: download + extract, then run install.sh with sudo so
             # the helper daemon and any new system packages are applied too.
-            src_root = updater.download_and_install(latest, skip_root=False)
+            src_root = updater.download_and_install(target, skip_root=False)
             if not src_root:
                 print("Upgrade failed: could not download the release.", file=sys.stderr)
                 return 1
@@ -84,7 +98,7 @@ def cmd_upgrade(use_sudo):
             # Unprivileged install: skips the root-only steps (apt + helper
             # daemon), which are already installed (we already confirmed this
             # release doesn't need them).
-            updater.download_and_install(latest, skip_root=True)
+            updater.download_and_install(target, skip_root=True)
     except subprocess.CalledProcessError as e:
         print(f"Upgrade failed: install.sh exited with an error (code {e.returncode}).",
               file=sys.stderr)
@@ -96,12 +110,29 @@ def cmd_upgrade(use_sudo):
         print("Check your internet connection and try again.", file=sys.stderr)
         return 1
 
-    print(f"Upgraded to {latest}.")
+    print(f"Upgraded to {target}.")
     if updater.restart_running_app():
         print("EchoTray was running and has been restarted with the new version.")
     else:
         print("Restart EchoTray to use the new version.")
     return 0
+
+
+def cmd_uninstall():
+    """Remove EchoTray completely (app, helper daemon, socket, launcher, icons).
+
+    Runs the bundled uninstall.sh from the install dir. It stops the running
+    GUI, removes the helper daemon + socket unit (sudo), and removes the app,
+    launcher, and icons. Prompts whether to keep the downloaded model.
+    """
+    import pathlib
+    install_dir = pathlib.Path.home() / ".local/share/echotray"
+    uninstall_sh = install_dir / "uninstall.sh"
+    if not uninstall_sh.is_file():
+        print("Uninstall script not found at " + str(uninstall_sh), file=sys.stderr)
+        print("Reinstall EchoTray first, or remove it manually.", file=sys.stderr)
+        return 1
+    return subprocess.run(["bash", str(uninstall_sh)]).returncode
 
 
 def main(argv):
@@ -117,6 +148,8 @@ def main(argv):
     if cmd == "upgrade":
         use_sudo = "--sudo" in argv[1:]
         return cmd_upgrade(use_sudo)
+    if cmd == "uninstall":
+        return cmd_uninstall()
     if cmd in ("-h", "--help", "help"):
         _print_usage()
         return 0

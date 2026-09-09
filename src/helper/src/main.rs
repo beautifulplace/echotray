@@ -100,6 +100,9 @@ const F_SETFL: c_int = 4;
 
 const SOCK_PATH: &str = "/run/echotray.sock";
 const MAX_CLIENTS: usize = 8;
+// One-time settle after creating the uinput device, so the compositor has time
+// to register it before the first keystroke (covers startup and daemon restart).
+const UINPUT_SETTLE_US: u32 = 500_000;
 
 extern "C" {
     fn socket(domain: c_int, ty: c_int, protocol: c_int) -> c_int;
@@ -207,6 +210,15 @@ impl UInput {
             unsafe { close(fd) };
             return Err(format!("UI_DEV_CREATE: {}", strerror_str(errno())));
         }
+
+        // The compositor (mutter/libinput) needs time to recognize and enable a
+        // newly-created uinput device (via udev) before it will read keystrokes
+        // from it. This is a one-time settle at startup (and after a daemon
+        // restart), so the first paste isn't lost to the registration window.
+        // ydotool documents this exact behavior and solves it with a persistent
+        // daemon holding the device open; the settle delay covers the brief
+        // window after a restart.
+        unsafe { usleep(UINPUT_SETTLE_US) };
 
         Ok(UInput { fd })
     }

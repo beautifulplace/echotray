@@ -2,9 +2,8 @@
 
 Kept in its own GTK-free module so the `echotray upgrade` CLI can read the
 version and repo URL without importing the GTK app (which needs a display and
-the GTK bindings). The Gitea build points at Gitea (5.x line), the GitHub build
-at GitHub (2.x line) — each build checks its own version line.
+the GTK bindings).
 """
 
-__version__ = "2.4.3"
+__version__ = "2.5.0"
 REPO_URL = "https://github.com/beautifulplace/echotray"

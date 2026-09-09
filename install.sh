@@ -4,6 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 cd "$SCRIPT_DIR"
 
+# When run under sudo (the `echotray upgrade --sudo` path), sudo resets $HOME
+# to /root, which would install the app into root's home instead of the real
+# user's. Restore the invoking user's home so the install lands in the right
+# place. (SUDO_USER is set by sudo; getent resolves the home dir portably.)
+if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = "0" ]; then
+    REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    if [ -n "$REAL_HOME" ]; then
+        export HOME="$REAL_HOME"
+    fi
+fi
+
 # Installation prefix: everything EchoTray owns lives here, per the user's
 # request - the app code, its venv, its config, and the downloaded model.
 INSTALL_DIR="$HOME/.local/share/echotray"
@@ -151,11 +162,23 @@ Type=Application
 Categories=Utility;Audio;
 Terminal=false
 StartupNotify=false
+StartupWMClass=echotray
 EOF
 # GNOME requires the .desktop file to be marked executable/trusted before it
 # will show/launch it from the app grid; otherwise clicking does nothing.
 chmod +x "$DESKTOP_FILE"
 echo "  Installed: $DESKTOP_FILE"
+
+# Install the icon into the user's hicolor theme under the name "echotray".
+# Process lists (GNOME System Monitor) look icons up BY PROCESS NAME; the app
+# reports itself as "echotray" since 5.6.8, so this makes those tools show the
+# EchoTray mic instead of the interpreter's icon. The helper daemon is a Rust
+# binary already named "echotray-helperd", so it only needs the matching icon.
+ICON_THEME_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+mkdir -p "$ICON_THEME_DIR"
+cp "$APP_ICON" "$ICON_THEME_DIR/echotray.svg"
+cp "$APP_ICON" "$ICON_THEME_DIR/echotray-helperd.svg"
+echo "  Installed theme icons: echotray.svg, echotray-helperd.svg"
 
 # Create a simple CLI wrapper so the app can be run with just 'echotray'
 # instead of the full venv python path. It launches the app detached (new
@@ -179,6 +202,25 @@ echo "  Installed CLI wrapper: $WRAPPER"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$WRAPPER" "$HOME/.local/bin/echotray"
 echo "  Symlinked: $HOME/.local/bin/echotray"
+
+# Copy the uninstall script into the install dir so `echotray uninstall` can
+# find and run it (the CLI runs from the installed copy, not the clone).
+cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+chmod +x "$INSTALL_DIR/uninstall.sh"
+echo "  Installed uninstall script: $INSTALL_DIR/uninstall.sh"
+
+# When run under sudo, everything above was created as root. Hand ownership of
+# the install dir and the per-user launcher/icon files back to the invoking
+# user so the app (which runs unprivileged) can write its .env and model cache.
+if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = "0" ]; then
+    REAL_GROUP="$(id -gn "$SUDO_USER" 2>/dev/null || echo "$SUDO_USER")"
+    chown -R "$SUDO_USER":"$REAL_GROUP" "$INSTALL_DIR" 2>/dev/null || true
+    chown "$SUDO_USER":"$REAL_GROUP" \
+        "$DESKTOP_FILE" \
+        "$ICON_THEME_DIR/echotray.svg" \
+        "$ICON_THEME_DIR/echotray-helperd.svg" \
+        "$HOME/.local/bin/echotray" 2>/dev/null || true
+fi
 
 echo ""
 echo "=== Setup complete ==="

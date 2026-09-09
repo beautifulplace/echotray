@@ -53,6 +53,18 @@ if is_helper_current; then
     echo "  Step 3/4: Helper daemon is already installed and running - skipping."
 else
     echo "  Step 3/4: Installing systemd service..."
+    # Migrate away from socket activation (5.6.10-5.6.16): stop, disable, and
+    # remove the socket unit so it doesn't hold /run/echotray.sock and conflict
+    # with the always-on service (EADDRINUSE). The always-on service creates
+    # and binds the socket itself.
+    if systemctl list-unit-files 2>/dev/null | grep -q '^echotray-helperd\.socket'; then
+        systemctl stop echotray-helperd.socket 2>/dev/null || true
+        systemctl disable echotray-helperd.socket 2>/dev/null || true
+        rm -f /etc/systemd/system/echotray-helperd.socket
+    fi
+    # The socket unit leaves a stale socket file behind; remove it so the
+    # always-on service can bind cleanly.
+    rm -f /run/echotray.sock
     install -m 644 "$SERVICE" /etc/systemd/system/echotray-helperd.service
     systemctl daemon-reload
 
