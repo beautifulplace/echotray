@@ -503,6 +503,10 @@ class AboutWindow(Gtk.Window):
             return
         self._upgrade_btn.set_sensitive(False)
         self._upgrade_btn.set_label("Updating...")
+        # Drop the Ignore button immediately: once an upgrade is running the
+        # user is committed to it; ignoring the version mid-flight makes no
+        # sense. It comes back only if the upgrade fails.
+        self._ignore_btn.hide()
 
         def _job():
             try:
@@ -520,6 +524,8 @@ class AboutWindow(Gtk.Window):
         # Restore the pre-upgrade state so the user can retry or ignore.
         self._upgrade_btn.set_sensitive(True)
         self._upgrade_btn.set_label("Update")
+        # Bring the Ignore button back: the user is still on the old version.
+        self._ignore_btn.show()
 
     def _upgrade_done(self):
         # Upgrade succeeded: the new version is installed but not running yet.
@@ -1666,7 +1672,9 @@ class DictationApp:
     def _settle_idle_icon(self):
         # Only settle on green if we're still idle (a new recording may have
         # started in the meantime, in which case its icon already won).
-        if self.state == "IDLE":
+        # With no model loaded the tray must stay grey (the setup poll and
+        # _update_icon both key the disabled state off model is None).
+        if self.state == "IDLE" and self.model is not None:
             self.indicator.set_icon_full(ICON_IDLE, "Idle")
             self._last_icon = ICON_IDLE
         return False  # one-shot

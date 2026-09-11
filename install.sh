@@ -45,9 +45,9 @@ _REQUIRED_PACKAGES=(
     libnotify-bin
 )
 
-# ECHOTRAY_SKIP_ROOT=1 skips the root-only steps (apt packages + helper daemon).
-# The in-app upgrade flow sets this, since those are already installed on an
-# existing install and the upgrade runs unprivileged.
+# ECHOTRAY_SKIP_ROOT=1 skips the privileged steps (apt packages + helper
+# daemon). The in-app upgrade flow sets this; install.sh also sets it itself
+# when re-executing as the invoking user after the privileged phase.
 SKIP_ROOT="${ECHOTRAY_SKIP_ROOT:-0}"
 
 _missing_packages() {
@@ -59,6 +59,48 @@ _missing_packages() {
     done
     echo "$missing"
 }
+
+
+# Privileged phase: when launched under sudo (the `echotray upgrade --sudo`
+# path or `sudo ./install.sh`), root performs ONLY the privileged steps (apt
+# packages + helper daemon) and then re-executes this script as the invoking
+# user. Everything under $HOME is therefore created BY THAT USER, never by
+# root - the previous design ran the whole install as root and chowned files
+# back at the end, which could leave root-owned directories behind (e.g.
+# ~/.local/share/icons/hicolor) that later broke plain-user installs.
+if [ "$(id -u)" = "0" ]; then
+    if [ -z "${SUDO_USER:-}" ]; then
+        echo "ERROR: refusing to install into root's home directory." >&2
+        echo "Run this script as your normal user (./install.sh); it calls" >&2
+        echo "sudo itself for the privileged steps." >&2
+        exit 1
+    fi
+    REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    if [ -z "$REAL_HOME" ]; then
+        echo "ERROR: could not resolve the home directory of $SUDO_USER." >&2
+        exit 1
+    fi
+    echo "=== EchoTray Setup (privileged steps) ==="
+    if [ "$SKIP_ROOT" = "1" ]; then
+        echo "  Skipping apt packages + helper daemon (ECHOTRAY_SKIP_ROOT=1)."
+    else
+        MISSING=$(_missing_packages)
+        if [ -n "$MISSING" ]; then
+            echo "  Installing missing system packages...$MISSING"
+            apt-get install -y $MISSING
+        else
+            echo "  All required system packages are already installed - skipping apt."
+        fi
+        echo "  Ensuring the privileged helper daemon (echotray-helperd)..."
+        bash "$SCRIPT_DIR/helper_install.sh"
+    fi
+    echo "  Privileged steps complete - re-running as $SUDO_USER..."
+    exec sudo -u "$SUDO_USER" \
+        env "HOME=$REAL_HOME" \
+        "PATH=$REAL_HOME/.local/bin:$REAL_HOME/.cargo/bin:$PATH" \
+        "ECHOTRAY_SKIP_ROOT=1" \
+        bash "$SCRIPT_DIR/install.sh"
+fi
 
 if [ "$SKIP_ROOT" = "1" ]; then
     echo "[1/4] Skipping system packages (ECHOTRAY_SKIP_ROOT=1)."
@@ -171,15 +213,24 @@ echo "  Installed: $DESKTOP_FILE"
 
 # Install the icon into the user's hicolor theme under the name "echotray".
 # Process lists (GNOME System Monitor) look icons up BY PROCESS NAME; the app
-# reports itself as "echotray" since the desktop-identity change, so this makes
-# those tools show the
+# reports itself as "echotray" since the desktop-identity change, so this makes those tools show the
 # EchoTray mic instead of the interpreter's icon. The helper daemon is a Rust
 # binary already named "echotray-helperd", so it only needs the matching icon.
 ICON_THEME_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
-mkdir -p "$ICON_THEME_DIR"
-cp "$APP_ICON" "$ICON_THEME_DIR/echotray.svg"
-cp "$APP_ICON" "$ICON_THEME_DIR/echotray-helperd.svg"
-echo "  Installed theme icons: echotray.svg, echotray-helperd.svg"
+# Warn and continue instead of aborting: a theme directory with the wrong
+# ownership (e.g. left root-owned by an old sudo-era install) must not kill
+# the rest of the install (CLI wrapper, ~/.local/bin symlink, uninstall.sh).
+# System Monitor then shows a generic icon; nothing else is affected.
+if mkdir -p "$ICON_THEME_DIR" 2>/dev/null && \
+   cp "$APP_ICON" "$ICON_THEME_DIR/echotray.svg" 2>/dev/null && \
+   cp "$APP_ICON" "$ICON_THEME_DIR/echotray-helperd.svg" 2>/dev/null; then
+    echo "  Installed theme icons: echotray.svg, echotray-helperd.svg"
+else
+    echo "  WARNING: could not install theme icons into $ICON_THEME_DIR" >&2
+    echo "  (is ~/.local/share/icons writable by your user?). The rest of the" >&2
+    echo "  install completed; System Monitor will show a generic icon until" >&2
+    echo "  the ownership of ~/.local/share/icons is fixed." >&2
+fi
 
 # Create a simple CLI wrapper so the app can be run with just 'echotray'
 # instead of the full venv python path. It launches the app detached (new
@@ -209,19 +260,6 @@ echo "  Symlinked: $HOME/.local/bin/echotray"
 cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 chmod +x "$INSTALL_DIR/uninstall.sh"
 echo "  Installed uninstall script: $INSTALL_DIR/uninstall.sh"
-
-# When run under sudo, everything above was created as root. Hand ownership of
-# the install dir and the per-user launcher/icon files back to the invoking
-# user so the app (which runs unprivileged) can write its .env and model cache.
-if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = "0" ]; then
-    REAL_GROUP="$(id -gn "$SUDO_USER" 2>/dev/null || echo "$SUDO_USER")"
-    chown -R "$SUDO_USER":"$REAL_GROUP" "$INSTALL_DIR" 2>/dev/null || true
-    chown "$SUDO_USER":"$REAL_GROUP" \
-        "$DESKTOP_FILE" \
-        "$ICON_THEME_DIR/echotray.svg" \
-        "$ICON_THEME_DIR/echotray-helperd.svg" \
-        "$HOME/.local/bin/echotray" 2>/dev/null || true
-fi
 
 echo ""
 echo "=== Setup complete ==="

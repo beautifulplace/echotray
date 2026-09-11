@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.5.2] - 2026-09-11
+
+### Fixed
+- **Sudo installs no longer leave root-owned files in your home.** Under
+  sudo, root now performs only the privileged steps (system packages and the
+  helper daemon) and the script re-executes itself as the invoking user, so
+  everything under the home directory is created by that user instead of by
+  root. The old flow ran the whole install as root and chowned only the files
+  it remembered, never the directories it created; that is what could leave a
+  root-owned ~/.local/share/icons/hicolor behind and make later plain-user
+  installs die with "cp: Permission denied" at the theme-icon step.
+- **A non-writable icon theme directory no longer aborts the install.** The
+  theme-icon copy is now warn-and-continue: on failure the installer prints a
+  warning and still installs the CLI wrapper, the ~/.local/bin/echotray
+  symlink, and uninstall.sh.
+- Bare-root runs (sudo with no invoking user) are refused with a clear error
+  instead of installing into root's home.
+- **The tray no longer shows the green idle icon when no model is loaded.**
+  It keeps the grey "Waiting for model" icon until a model is actually loaded.
+- The About window now hides the "Ignore version" button as soon as Update is
+  clicked (while the button shows "Updating..."). It reappears only if the
+  upgrade fails, so a retry or ignore is still possible after an error.
+
 ## [2.5.1] - 2026-09-08
 
 ### Fixed
