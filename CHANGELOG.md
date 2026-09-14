@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.3] - 2026-09-13
+
+### Changed
+- Repository URLs updated after the GitHub account was renamed. `REPO_URL`,
+  the README clone URL, and the uninstall instructions now point at the new
+  location. The in-app update check reads `REPO_URL`, so this release is what
+  moves installed copies to the new URL.
+
 ## [2.5.2] - 2026-09-11
 
 ### Fixed

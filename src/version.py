@@ -5,5 +5,5 @@ version and repo URL without importing the GTK app (which needs a display and
 the GTK bindings).
 """
 
-__version__ = "2.5.2"
+__version__ = "2.5.3"
 REPO_URL = "https://github.com/rebelcommand/echotray"
