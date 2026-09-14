@@ -6,4 +6,4 @@ the GTK bindings).
 """
 
 __version__ = "2.5.2"
-REPO_URL = "https://github.com/beautifulplace/echotray"
+REPO_URL = "https://github.com/rebelcommand/echotray"

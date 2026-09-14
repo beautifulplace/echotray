@@ -103,7 +103,7 @@ X11**, and is not tied to any one desktop:
 ## Setup
 
 ```bash
-git clone https://github.com/beautifulplace/echotray.git
+git clone https://github.com/rebelcommand/echotray.git
 cd echotray
 ./install.sh
 ```
